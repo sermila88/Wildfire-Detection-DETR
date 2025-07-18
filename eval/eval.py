@@ -10,13 +10,13 @@ from torchvision.ops import box_iou
 import torch
 from sklearn.metrics import precision_score, recall_score, f1_score, accuracy_score
 
-model = RFDETRBase(pretrain_weights="/vol/bitbucket/si324/rf-detr-wildfire/output/checkpoint_best_ema.pth")  
+model = RFDETRBase(pretrain_weights="/vol/bitbucket/si324/rf-detr-wildfire/output/img_data_train_output/checkpoint_best_ema.pth")  
 
 # Test set location 
-dataset_path = "/vol/bitbucket/si324/rf-detr-wildfire/rf-initial-test-data/WildfireSmoke.v1-raw.coco/test"
+dataset_path = "/vol/bitbucket/si324/rf-detr-wildfire/pyro25img/images/test"
 
 # Output directory for plots
-output_dir = "/vol/bitbucket/si324/rf-detr-wildfire/eval/output"
+output_dir = "/vol/bitbucket/si324/rf-detr-wildfire/eval/img_data_train_output"
 os.makedirs(output_dir, exist_ok=True)
 
 # Load test dataset (COCO format)
