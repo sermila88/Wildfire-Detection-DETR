@@ -5,12 +5,12 @@ import supervision as sv
 from rfdetr import RFDETRBase
 
 # --- Paths ---
-DATASET_ROOT = "/vol/bitbucket/si324/rf-detr-wildfire/rf-initial-test-data/WildfireSmoke.v1-raw.coco"
-OUTPUT_ROOT = "/vol/bitbucket/si324/rf-detr-wildfire/bounding_boxes/predicted_outputs"
-MODEL_PATH = "/vol/bitbucket/si324/rf-detr-wildfire/output/checkpoint_best_ema.pth"
+DATASET_ROOT = "/vol/bitbucket/si324/rf-detr-wildfire/pyro25img/images"
+OUTPUT_ROOT = "/vol/bitbucket/si324/rf-detr-wildfire/scripts/bounding_boxes/Pyro25Images/predicted_bboxes"
+MODEL_PATH = "/vol/bitbucket/si324/rf-detr-wildfire/output/img_data_train_output/checkpoint_best_ema.pth"
 
 # --- Load fine-tuned model ---
-model = RFDETRBase(pretrain_weights="/vol/bitbucket/si324/rf-detr-wildfire/output/checkpoint_best_ema.pth")
+model = RFDETRBase(pretrain_weights="/vol/bitbucket/si324/rf-detr-wildfire/output/img_data_train_output/checkpoint_best_ema.pth")
 
 splits = ["train", "valid", "test"]  
 
