@@ -105,9 +105,9 @@ for pred, target in zip(predictions, targets):
                 y_pred.append(1)
 
 # Classification metrics
-precision = precision_score(y_true, y_pred, zero_division=0)
-recall = recall_score(y_true, y_pred, zero_division=0)
-f1 = f1_score(y_true, y_pred, zero_division=0)
+precision = precision_score(y_true, y_pred, zero_division="0")
+recall = recall_score(y_true, y_pred, zero_division="0")
+f1 = f1_score(y_true, y_pred, zero_division="0")
 acc = accuracy_score(y_true, y_pred)
 
 print(f"✅ Precision: {precision:.4f}")
