@@ -4,7 +4,7 @@ from tqdm import tqdm
 from supervision.metrics import MeanAveragePrecision
 from PIL import Image
 import numpy as np
-from rfdetr import RFDETRBase
+from rfdetr.detr import RFDETRBase
 import matplotlib.pyplot as plt
 from torchvision.ops import box_iou
 import torch
