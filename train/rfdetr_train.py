@@ -12,7 +12,7 @@ os.environ["LOCAL_RANK"] = "0"
 # EXPERIMENT CONFIGURATION
 # ============================================================================
 # Modify this  for different experiments
-EXPERIMENT_NAME = "smoke_detection_v1_1120_high_res"  # Change this for different experiments
+EXPERIMENT_NAME = "rfdetr_smoke_detection_v1_1120_high_res"  # Change this for different experiments
 
 # Dataset path (COCO format)
 dataset_path = "/vol/bitbucket/si324/rf-detr-wildfire/data/pyro25img/images"

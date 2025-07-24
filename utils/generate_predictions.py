@@ -6,7 +6,7 @@ from rfdetr.detr import RFDETRBase
 import numpy as np
 
 # --- Configuration ---
-EXPERIMENT_NAME = "smoke_detection_v1"  # Change this to match your experiment
+EXPERIMENT_NAME = "rfdetr_smoke_detection_v1"  # Change this to match your experiment
 DATASET_ROOT = "/vol/bitbucket/si324/rf-detr-wildfire/data/pyro25img/images"
 OUTPUT_ROOT = f"/vol/bitbucket/si324/rf-detr-wildfire/bounding_boxes/Pyro25Images/predicted_bboxes/{EXPERIMENT_NAME}"
 MODEL_PATH = f"/vol/bitbucket/si324/rf-detr-wildfire/outputs/{EXPERIMENT_NAME}/checkpoints/checkpoint_best_ema.pth"

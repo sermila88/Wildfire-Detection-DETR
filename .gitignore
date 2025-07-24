@@ -1,0 +1,73 @@
+venv/
+.venv/
+.vscode/
+.DS_Store
+
+# Data directories
+data/
+pyrodata/
+rf-initial-test-data/
+pyro25img/
+
+# Output directories
+outputs/
+output_old/
+bounding_boxes/ 
+
+# SLURM job outputs
+*.out
+*.err
+slurm-*.out
+slurm-*.err
+
+# Log files
+*.log
+logs/
+*.log.*
+
+# Python cache
+*.pyc
+*.pyo
+*.pyd
+__pycache__/
+.Python
+*.egg-info/
+dist/
+build/
+
+# Jupyter notebooks
+.ipynb_checkpoints
+
+# Model files
+*.pth
+*.pt
+*.onnx
+*.pkl
+*.pickle
+*.ckpt
+*.h5
+*.hdf5
+
+# IDE
+.idea/
+*.swp
+*.swo
+*~
+
+# OS files
+Thumbs.db
+*.tmp
+*.temp
+
+# Coverage reports
+htmlcov/
+.coverage
+.coverage.*
+coverage.xml
+
+# Environment files
+.env
+.env.local
+.env.*.local
+
+
