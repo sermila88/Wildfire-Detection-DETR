@@ -1,7 +1,7 @@
 #!/bin/bash
 #SBATCH --job-name=rtdetr_smoke_training
-#SBATCH --output=outputs/rtdetr_smoke_detection_v1/logs/rtdetr_training_%j.out
-#SBATCH --error=outputs/rtdetr_smoke_detection_v1/logs/rtdetr_training_%j.err
+#SBATCH --output=/vol/bitbucket/si324/rf-detr-wildfire/outputs/rtdetr_smoke_detection_v1/logs/rtdetr_training_%j.out
+#SBATCH --error=/vol/bitbucket/si324/rf-detr-wildfire/outputs/rtdetr_smoke_detection_v1/logs/rtdetr_training_%j.err
 #SBATCH --gres=gpu:1
 #SBATCH --mem=32G
 #SBATCH --time=24:00:00

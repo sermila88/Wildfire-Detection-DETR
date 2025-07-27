@@ -5,13 +5,19 @@ RT-DETR Training Script for Wildfire Smoke Detection using Ultralytics
 
 import os
 import torch
+from pathlib import Path
 from ultralytics import RTDETR
+
+# Set cache directory for Ultralytics models to prevent downloads to project root
+cache_dir = Path.home() / ".ultralytics_cache"
+cache_dir.mkdir(exist_ok=True)
+os.environ['ULTRALYTICS_CACHE_DIR'] = str(cache_dir)
 
 # ============================================================================
 # EXPERIMENT CONFIGURATION  
 # ============================================================================
 EXPERIMENT_NAME = "rtdetr_smoke_detection_v1"
-DATASET_PATH = "/vol/bitbucket/si324/rf-detr-wildfire/data/pyro25img/images"
+DATASET_PATH = "/vol/bitbucket/si324/rf-detr-wildfire/data/pyro25img"
 
 # Directory structure
 project_root = "/vol/bitbucket/si324/rf-detr-wildfire"
@@ -43,12 +49,12 @@ def main():
     
     # Change to checkpoints directory so downloaded models go there
     original_dir = os.getcwd()
-    try:
-        os.chdir(checkpoints_dir)
-        model = RTDETR("rtdetr-x.pt")  # RT-DETR-X for best accuracy on tiny objects
-    finally:
-        # Always change back to original directory, even if model loading fails
-        os.chdir(original_dir)
+    os.chdir(checkpoints_dir)
+    
+    model = RTDETR("rtdetr-x.pt")  # RT-DETR-X for best accuracy on tiny objects
+    
+    # Change back to original directory
+    os.chdir(original_dir)
     
     print("🚀 Starting RT-DETR training...")
     print("📋 Using COCO dataset format with high resolution for tiny objects")
@@ -74,8 +80,7 @@ def main():
         warmup_epochs=3,  
         box=7.5,           
         cls=0.5,         
-        dfl=1.5,
-        workers=6,         # Reduce from default 8 to recommended 6
+        dfl=1.5,          
     )
     
     print(f"✅ RT-DETR training completed!")

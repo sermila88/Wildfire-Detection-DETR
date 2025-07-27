@@ -25,6 +25,9 @@ source /vol/cuda/12.0.0/setup.sh
 # Change to project directory  
 cd /vol/bitbucket/si324/rf-detr-wildfire
 
+# Set Ultralytics cache to project directory to avoid disk quota issues
+export ULTRALYTICS_CACHE_DIR=/vol/bitbucket/si324/rf-detr-wildfire/.cache
+
 # Create outputs directory
 mkdir -p outputs/hyperparameter_tuning_v2
 

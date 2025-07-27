@@ -2,18 +2,26 @@ import optuna
 import torch
 import torch.distributed
 import os
+import sys
 import json
 import time
 import shutil
 import pickle
 import matplotlib
+import torchvision
 matplotlib.use('Agg')  # Use non-interactive backend for headless servers
 import matplotlib.pyplot as plt
 import numpy as np
 from datetime import datetime
+from pathlib import Path
 from rfdetr.detr import RFDETRBase
 import supervision as sv
 from PIL import Image
+
+# Set cache directory for any Ultralytics models to prevent downloads to project root
+cache_dir = Path.home() / ".ultralytics_cache"
+cache_dir.mkdir(exist_ok=True)
+os.environ['ULTRALYTICS_CACHE_DIR'] = str(cache_dir)
 
 # Config
 EXPERIMENT_NAME = "hyperparameter_tuning_v2"  # Change this for different tuning experiments
@@ -191,7 +199,7 @@ class Logger:
             'system_info': {
                 'gpu_name': torch.cuda.get_device_name() if torch.cuda.is_available() else 'CPU',
                 'gpu_memory_total': torch.cuda.get_device_properties(0).total_memory / 1024**3 if torch.cuda.is_available() else 0,
-                'python_version': os.sys.version,
+                'python_version': sys.version,
                 'pytorch_version': torch.__version__
             }
         }
@@ -378,7 +386,7 @@ def evaluate_model(checkpoints_dir, resolution, logger):
     
     # More comprehensive evaluation
     correct = 0
-    total = min(100, len(ds))  # Slightly more thorough evaluation
+    total = min(100, len(ds))  
     evaluation_details = []
     
     eval_start = time.time()
@@ -387,12 +395,21 @@ def evaluate_model(checkpoints_dir, resolution, logger):
         try:
             path, image, annotations = ds[i]
             image = Image.open(path)
+
             detections = model.predict(image, threshold=0.3)
-            
-            has_smoke = len(annotations.xyxy) > 0
-            predicted_smoke = len(detections.xyxy) > 0
-            
-            is_correct = has_smoke == predicted_smoke
+
+            # Convert boxes to torch tensors
+            pred_tensor = torch.tensor(detections.xyxy) if detections.xyxy else torch.empty((0, 4))
+            gt_tensor = torch.tensor(annotations.xyxy) if annotations.xyxy else torch.empty((0, 4))
+
+            # IoU-based match
+            def has_good_overlap(pred_boxes, gt_boxes, iou_threshold=0.3):
+                if len(pred_boxes) == 0 or len(gt_boxes) == 0:
+                    return False
+                ious = torchvision.ops.box_iou(pred_boxes, gt_boxes)
+                return (ious > iou_threshold).any().item()
+
+            is_correct = has_good_overlap(pred_tensor, gt_tensor)
             if is_correct:
                 correct += 1
             
@@ -403,7 +420,7 @@ def evaluate_model(checkpoints_dir, resolution, logger):
                 'correct': is_correct,
                 'num_gt_boxes': len(annotations.xyxy),
                 'num_pred_boxes': len(detections.xyxy),
-                'confidence_scores': detections.confidence.tolist() if len(detections.confidence) > 0 else []
+                'confidence_scores': detections.confidence.tolist() if detections.confidence is not None and len(detections.confidence) > 0 else []
             })
             
         except Exception as e:
@@ -467,7 +484,7 @@ def main():
         },
         'system_info': {
             'pytorch_version': torch.__version__,
-            'cuda_version': torch.version.cuda if torch.cuda.is_available() else None
+            'cuda_version': getattr(torch.version, 'cuda', None) if torch.cuda.is_available() else None
         }
     }
     
