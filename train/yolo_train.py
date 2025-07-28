@@ -21,6 +21,8 @@ EXPERIMENT_NAME = "yolo_baseline_v1"  # Change this for different experiments
 
 # Dataset path
 dataset_path = "/vol/bitbucket/si324/rf-detr-wildfire/data/pyro25img/images"
+os.environ["ULTRALYTICS_HUB_DIR"] = f"/vol/bitbucket/{user}/rf-detr-wildfire/outputs/{EXPERIMENT_NAME}/.ultralytics_cache"
+os.environ["WANDB_DIR"] = os.path.join(experiment_dir, "wandb")
 
 # ============================================================================
 # OUTPUT DIRECTORY SETUP

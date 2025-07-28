@@ -1,10 +1,13 @@
 import glob
 import os
-from utils import xywh2xyxy, box_iou
+from pyronear_utils import xywh2xyxy, box_iou
 import numpy as np
 import matplotlib.pyplot as plt
 import pandas as pd
 
+EXPERIMENT_NAME = "yolo_baseline_v1"  # <-- change this per experiment
+EVAL_DIR = f"outputs/{EXPERIMENT_NAME}/eval_results"
+os.makedirs(EVAL_DIR, exist_ok=True)
 
 
 def evaluate_predictions(pred_folder, gt_folder, conf_th=0.1, cat=None):
@@ -146,10 +149,12 @@ def find_best_conf_threshold_and_plot(
     # save 
     # save the best recall, precision and f1 score
     
-    np.save(f"{pred_folder}/f1_scores.npy", f1_scores)
-    np.save(f"{pred_folder}/precisions.npy", precisions)
-    np.save(f"{pred_folder}/recalls.npy", recalls)
-    np.save(f"{pred_folder}/conf_thres.npy", conf_thres_range)
+    np.save(f"{EVAL_DIR}/f1_scores.npy", f1_scores)
+    np.save(f"{EVAL_DIR}/precisions.npy", precisions)
+    np.save(f"{EVAL_DIR}/recalls.npy", recalls)
+    np.save(f"{EVAL_DIR}/conf_thres.npy", conf_thres_range)
+
+
 
     if plot:
 
@@ -197,9 +202,73 @@ def find_best_conf_threshold_and_plot(
         plt.legend()
         plt.grid(True)
         # save in predictions folder
-        plt.savefig(f"{pred_folder}/metrics.png")
+        plt.savefig(f"{EVAL_DIR}/metrics.png")
         # save the list
 
         plt.show()
 
     return best_conf_thres, best_f1_score, best_precision, best_recall
+
+
+if __name__ == "__main__":
+    import json
+    from datetime import datetime
+    
+    print("🚀 Starting PyroNear YOLO Baseline Evaluation")
+    print(f"📅 Started at: {datetime.now()}")
+    
+    # ===== UPDATE THESE PATHS =====
+    GT_FOLDER = "/vol/bitbucket/si324/rf-detr-wildfire/data/pyro25img/labels/test"  # GT labels
+    PRED_FOLDER = "/vol/bitbucket/si324/rf-detr-wildfire/models/yolo_baseline_v1/test_preds/train/labels"  # Predictions
+    
+    # Check paths exist
+    if not os.path.exists(GT_FOLDER):
+        print(f"❌ GT folder not found: {GT_FOLDER}")
+        print("   Please update GT_FOLDER path")
+        exit(1)
+        
+    if not os.path.exists(PRED_FOLDER):
+        print(f"❌ Predictions folder not found: {PRED_FOLDER}")
+        print("   Please update PRED_FOLDER path")
+        exit(1)
+    
+    print(f"✅ GT folder: {GT_FOLDER}")
+    print(f"✅ Predictions folder: {PRED_FOLDER}")
+    
+    # Run evaluation (same as PyroNear)
+    conf_range = np.arange(0.1, 0.9, 0.05)
+    print(f"📊 Testing {len(conf_range)} confidence thresholds")
+    
+    try:
+        best_conf, best_f1, best_precision, best_recall = find_best_conf_threshold_and_plot(
+            PRED_FOLDER, GT_FOLDER, conf_range, plot=True
+        )
+        
+        # Save summary results
+        summary = {
+            "experiment_name": EXPERIMENT_NAME,
+            "best_confidence_threshold": float(best_conf),
+            "best_f1_score": float(best_f1),
+            "best_precision": float(best_precision),
+            "best_recall": float(best_recall),
+            "evaluation_timestamp": datetime.now().isoformat(),
+            "gt_folder": GT_FOLDER,
+            "pred_folder": PRED_FOLDER
+        }
+        
+        with open(f"{EVAL_DIR}/summary_results.json", "w") as f:
+            json.dump(summary, f, indent=2)
+        
+        print(f"\n🎉 EVALUATION COMPLETE!")
+        print(f"🏆 Best F1: {best_f1:.3f} at confidence {best_conf:.3f}")
+        print(f"📊 Precision: {best_precision:.3f}, Recall: {best_recall:.3f}")
+        print(f"📁 Results saved to: {EVAL_DIR}/")
+        print(f"📈 Plot saved to: {EVAL_DIR}/metrics.png")
+        
+    except Exception as e:
+        print(f"❌ Evaluation failed: {e}")
+        import traceback
+        traceback.print_exc()
+        exit(1)
+    
+    print(f"✅ Finished at: {datetime.now()}")

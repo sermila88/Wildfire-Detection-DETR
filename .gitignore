@@ -70,4 +70,5 @@ coverage.xml
 .env.local
 .env.*.local
 
-
+wandb/
+models/
