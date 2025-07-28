@@ -12,6 +12,8 @@ os.makedirs(EVAL_DIR, exist_ok=True)
 
 def evaluate_predictions(pred_folder, gt_folder, conf_th=0.1, cat=None):
     nb_fp, nb_tp, nb_fn = 0, 0, 0
+    # Track correct predictions (TP + TN) for spatial accuracy calculation
+    total_correct = 0
 
     gt_filenames = [
         os.path.splitext(os.path.basename(f))[0]
@@ -72,6 +74,21 @@ def evaluate_predictions(pred_folder, gt_folder, conf_th=0.1, cat=None):
         if gt_boxes:
             nb_fn += len(gt_boxes) - np.sum(gt_matches)
 
+        # Check if ground truth has any smoke boxes in this image
+        # True if GT file contains smoke annotations, False if empty/no smoke
+        has_smoke_gt = len(gt_boxes) > 0
+        # Check if prediction file exists and has any predictions
+        has_smoke_pred = os.path.isfile(pred_file) and os.path.getsize(pred_file) > 0
+        # Check if there is spatial overlap between predictions and ground truth
+        spatial_match = has_smoke_gt and has_smoke_pred and np.sum(gt_matches) > 0
+
+        # Count correct predictions for accuracy calculation
+        if (has_smoke_gt and spatial_match) or (not has_smoke_gt and not has_smoke_pred):
+            total_correct += 1
+
+    # Calculate spatial accuracy = (TP + TN) / Total images
+    spatial_accuracy = total_correct / len(all_filenames) if len(all_filenames) > 0 else 0
+
     precision = nb_tp / (nb_tp + nb_fp) if (nb_tp + nb_fp) > 0 else 0
     recall = nb_tp / (nb_tp + nb_fn) if (nb_tp + nb_fn) > 0 else 0
     f1_score = (
@@ -80,7 +97,7 @@ def evaluate_predictions(pred_folder, gt_folder, conf_th=0.1, cat=None):
         else 0
     )
 
-    return {"precision": precision, "recall": recall, "f1_score": f1_score}
+    return {"precision": precision, "recall": recall, "f1_score": f1_score, "spatial_accuracy": spatial_accuracy}
 
 
 def find_best_conf_threshold(pred_folder, gt_folder, conf_thres_range, cat=None):
@@ -88,6 +105,7 @@ def find_best_conf_threshold(pred_folder, gt_folder, conf_thres_range, cat=None)
     best_f1_score = 0
     best_precision = 0
     best_recall = 0
+    best_accuracy = 0
 
     for conf_thres in conf_thres_range:
         results = evaluate_predictions(pred_folder, gt_folder, conf_thres, cat)
@@ -96,8 +114,9 @@ def find_best_conf_threshold(pred_folder, gt_folder, conf_thres_range, cat=None)
             best_f1_score = results["f1_score"]
             best_precision = results["precision"]
             best_recall = results["recall"]
+            best_accuracy = results["spatial_accuracy"]
 
-    return best_conf_thres, best_f1_score, best_precision, best_recall
+    return best_conf_thres, best_f1_score, best_precision, best_recall, best_accuracy
 
 
 def evaluate_multiple_pred_folders(pred_folders, gt_folder, conf_thres_range, cat=None):
@@ -109,11 +128,12 @@ def evaluate_multiple_pred_folders(pred_folders, gt_folder, conf_thres_range, ca
             "Best F1 Score",
             "Precision",
             "Recall",
+            "Accuracy",
         ]
     )
 
     for pred_folder in pred_folders:
-        best_conf_thres, best_f1_score, best_precision, best_recall = (
+        best_conf_thres, best_f1_score, best_precision, best_recall, best_accuracy= (
             find_best_conf_threshold(pred_folder, gt_folder, conf_thres_range, cat)
         )
 
@@ -124,6 +144,7 @@ def evaluate_multiple_pred_folders(pred_folders, gt_folder, conf_thres_range, ca
             best_f1_score,
             best_precision,
             best_recall,
+            best_accuracy,
         ]
 
     return results_df
@@ -132,13 +153,14 @@ def evaluate_multiple_pred_folders(pred_folders, gt_folder, conf_thres_range, ca
 def find_best_conf_threshold_and_plot(
     pred_folder, gt_folder, conf_thres_range, plot=True
 ):
-    f1_scores, precisions, recalls = [], [], []
+    f1_scores, precisions, recalls, accuracies = [], [], [], []
 
     for conf_thres in conf_thres_range:
         results = evaluate_predictions(pred_folder, gt_folder, conf_thres)
         f1_scores.append(results["f1_score"])
         precisions.append(results["precision"])
         recalls.append(results["recall"])
+        accuracies.append(results["spatial_accuracy"])
 
     # Find the best confidence threshold
     best_idx = np.argmax(f1_scores)
@@ -146,6 +168,7 @@ def find_best_conf_threshold_and_plot(
     best_f1_score = f1_scores[best_idx]
     best_precision = precisions[best_idx]
     best_recall = recalls[best_idx]
+    best_accuracy = accuracies[best_idx] 
     # save 
     # save the best recall, precision and f1 score
     
@@ -153,7 +176,7 @@ def find_best_conf_threshold_and_plot(
     np.save(f"{EVAL_DIR}/precisions.npy", precisions)
     np.save(f"{EVAL_DIR}/recalls.npy", recalls)
     np.save(f"{EVAL_DIR}/conf_thres.npy", conf_thres_range)
-
+    np.save(f"{EVAL_DIR}/accuracies.npy", accuracies)
 
 
     if plot:
@@ -171,6 +194,13 @@ def find_best_conf_threshold_and_plot(
             linestyle="--",
         )
         plt.plot(conf_thres_range, recalls, label="Recall", color="red", linestyle="-.")
+
+        plt.plot(
+            conf_thres_range, accuracies, label="Accuracy", color="purple", linestyle=":"
+        )
+        plt.scatter(
+            best_conf_thres, best_accuracy, color="purple", s=100, edgecolor="k", zorder=5
+        )
 
         # Highlight the best configuration
         plt.scatter(
@@ -191,12 +221,15 @@ def find_best_conf_threshold_and_plot(
         plt.text(
             best_conf_thres,
             best_f1_score,
-            f" Best F1: {best_f1_score:.2f}\n Precision: {best_precision:.2f}\n Recall: {best_recall:.2f}",
+            f"Best F1: {best_f1_score:.2f}\n"
+            f"Precision: {best_precision:.2f}\n"
+            f"Recall: {best_recall:.2f}\n \n"
+            f"Accuracy: {best_accuracy:.2f}",
             fontsize=9,
             verticalalignment="bottom",
         )
 
-        plt.title("F1 Score, Precision, and Recall vs. Confidence Threshold")
+        plt.title("Evaluation Metrics vs. Confidence Threshold")
         plt.xlabel("Confidence Threshold")
         plt.ylabel("Metric Value")
         plt.legend()
@@ -207,7 +240,7 @@ def find_best_conf_threshold_and_plot(
 
         plt.show()
 
-    return best_conf_thres, best_f1_score, best_precision, best_recall
+    return best_conf_thres, best_f1_score, best_precision, best_recall, best_accuracy
 
 
 if __name__ == "__main__":
@@ -235,12 +268,12 @@ if __name__ == "__main__":
     print(f"✅ GT folder: {GT_FOLDER}")
     print(f"✅ Predictions folder: {PRED_FOLDER}")
     
-    # Run evaluation (same as PyroNear)
+    # Run evaluation 
     conf_range = np.arange(0.1, 0.9, 0.05)
     print(f"📊 Testing {len(conf_range)} confidence thresholds")
     
     try:
-        best_conf, best_f1, best_precision, best_recall = find_best_conf_threshold_and_plot(
+        best_conf, best_f1, best_precision, best_recall, best_accuracy = find_best_conf_threshold_and_plot(
             PRED_FOLDER, GT_FOLDER, conf_range, plot=True
         )
         
@@ -251,6 +284,7 @@ if __name__ == "__main__":
             "best_f1_score": float(best_f1),
             "best_precision": float(best_precision),
             "best_recall": float(best_recall),
+            "best_accuracy": float(best_accuracy),
             "evaluation_timestamp": datetime.now().isoformat(),
             "gt_folder": GT_FOLDER,
             "pred_folder": PRED_FOLDER
@@ -261,7 +295,7 @@ if __name__ == "__main__":
         
         print(f"\n🎉 EVALUATION COMPLETE!")
         print(f"🏆 Best F1: {best_f1:.3f} at confidence {best_conf:.3f}")
-        print(f"📊 Precision: {best_precision:.3f}, Recall: {best_recall:.3f}")
+        print(f"📊 Precision: {best_precision:.3f}, Recall: {best_recall:.3f}, Accuracy: {best_accuracy:.3f}")
         print(f"📁 Results saved to: {EVAL_DIR}/")
         print(f"📈 Plot saved to: {EVAL_DIR}/metrics.png")
         
