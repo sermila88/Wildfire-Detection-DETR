@@ -11,9 +11,8 @@ os.makedirs(EVAL_DIR, exist_ok=True)
 
 
 def evaluate_predictions(pred_folder, gt_folder, conf_th=0.1, cat=None):
-    nb_fp, nb_tp, nb_fn = 0, 0, 0
-    # Track correct predictions (TP + TN) for spatial accuracy calculation
-    total_correct = 0
+    nb_fp, nb_tp, nb_fn, nb_tn = 0, 0, 0, 0
+
 
     gt_filenames = [
         os.path.splitext(os.path.basename(f))[0]
@@ -74,20 +73,34 @@ def evaluate_predictions(pred_folder, gt_folder, conf_th=0.1, cat=None):
         if gt_boxes:
             nb_fn += len(gt_boxes) - np.sum(gt_matches)
 
+
         # Check if ground truth has any smoke boxes in this image
         # True if GT file contains smoke annotations, False if empty/no smoke
         has_smoke_gt = len(gt_boxes) > 0
         # Check if prediction file exists and has any predictions
         has_smoke_pred = os.path.isfile(pred_file) and os.path.getsize(pred_file) > 0
-        # Check if there is spatial overlap between predictions and ground truth
-        spatial_match = has_smoke_gt and has_smoke_pred and np.sum(gt_matches) > 0
 
-        # Count correct predictions for accuracy calculation
-        if (has_smoke_gt and spatial_match) or (not has_smoke_gt and not has_smoke_pred):
-            total_correct += 1
+        # True Negative: no smoke in GT and no valid predictions above threshold
+        if not has_smoke_gt and not has_smoke_pred:
+            # Double-check no predictions are above threshold
+            has_valid_pred_above_thresh = False
+            if os.path.isfile(pred_file) and os.path.getsize(pred_file) > 0:
+                with open(pred_file, "r") as f:
+                    temp_boxes = [line.strip().split(" ") for line in f.readlines()]
+                for box in temp_boxes:
+                    try:
+                        conf = float(box[5])
+                        if conf >= conf_th:
+                            has_valid_pred_above_thresh = True
+                            break
+                    except:
+                        continue
+            
+            if not has_valid_pred_above_thresh:
+                nb_tn += 1
 
     # Calculate spatial accuracy = (TP + TN) / Total images
-    spatial_accuracy = total_correct / len(all_filenames) if len(all_filenames) > 0 else 0
+    spatial_accuracy = (nb_tp + nb_tn) / len(all_filenames) if len(all_filenames) > 0 else 0
 
     precision = nb_tp / (nb_tp + nb_fp) if (nb_tp + nb_fp) > 0 else 0
     recall = nb_tp / (nb_tp + nb_fn) if (nb_tp + nb_fn) > 0 else 0
@@ -97,7 +110,14 @@ def evaluate_predictions(pred_folder, gt_folder, conf_th=0.1, cat=None):
         else 0
     )
 
-    return {"precision": precision, "recall": recall, "f1_score": f1_score, "spatial_accuracy": spatial_accuracy}
+    return {"precision": precision, 
+            "recall": recall, 
+            "f1_score": f1_score, 
+            "spatial_accuracy": spatial_accuracy, 
+            "nb_tp": nb_tp, 
+            "nb_fp": nb_fp, 
+            "nb_fn": nb_fn, 
+            "nb_tn": nb_tn}
 
 
 def find_best_conf_threshold(pred_folder, gt_folder, conf_thres_range, cat=None):
@@ -276,6 +296,9 @@ if __name__ == "__main__":
         best_conf, best_f1, best_precision, best_recall, best_accuracy = find_best_conf_threshold_and_plot(
             PRED_FOLDER, GT_FOLDER, conf_range, plot=True
         )
+
+        # Get final detailed results at best threshold for confusion matrix
+        final_results = evaluate_predictions(PRED_FOLDER, GT_FOLDER, best_conf)
         
         # Save summary results
         summary = {
@@ -285,6 +308,12 @@ if __name__ == "__main__":
             "best_precision": float(best_precision),
             "best_recall": float(best_recall),
             "best_accuracy": float(best_accuracy),
+            "confusion_matrix": {
+                "true_positives": int(final_results["nb_tp"]),
+                "true_negatives": int(final_results["nb_tn"]),
+                "false_positives": int(final_results["nb_fp"]),
+                "false_negatives": int(final_results["nb_fn"])
+            },
             "evaluation_timestamp": datetime.now().isoformat(),
             "gt_folder": GT_FOLDER,
             "pred_folder": PRED_FOLDER
@@ -296,6 +325,7 @@ if __name__ == "__main__":
         print(f"\n🎉 EVALUATION COMPLETE!")
         print(f"🏆 Best F1: {best_f1:.3f} at confidence {best_conf:.3f}")
         print(f"📊 Precision: {best_precision:.3f}, Recall: {best_recall:.3f}, Accuracy: {best_accuracy:.3f}")
+        print(f"🔢 Confusion Matrix - TP: {final_results['nb_tp']}, TN: {final_results['nb_tn']}, FP: {final_results['nb_fp']}, FN: {final_results['nb_fn']}")
         print(f"📁 Results saved to: {EVAL_DIR}/")
         print(f"📈 Plot saved to: {EVAL_DIR}/metrics.png")
         

@@ -1,346 +1,389 @@
-# Import libraries 
-import os  
-import supervision as sv 
-from tqdm import tqdm  
-from supervision.metrics import MeanAveragePrecision 
-from PIL import Image  
-import numpy as np  
-from ultralytics import RTDETR
-import matplotlib.pyplot as plt 
-from sklearn.metrics import precision_score, recall_score, f1_score, accuracy_score  
-import json 
-from torchvision.ops import box_iou 
+"""
+Real Time Detection Transformer:
+RT-DETR Evaluation Script for Wildfire Smoke Detection
+"""
+
+import os
+import json
+import numpy as np
+import matplotlib.pyplot as plt
+from pathlib import Path
+from tqdm import tqdm
+from PIL import Image
 import torch
+from torchvision.ops import box_iou
+import supervision as sv
+from ultralytics import RTDETR
 
 # ============================================================================
-# EXPERIMENT CONFIGURATION
+# CONFIGURATION
 # ============================================================================
-# MUST MATCH the experiment name used in training!
-EXPERIMENT_NAME = "rtdetr_smoke_detection_v1"  # Change this to match your training experiment
+EXPERIMENT_NAME = "rtdetr_smoke_detection_v1"
+PROJECT_ROOT = "/vol/bitbucket/si324/rf-detr-wildfire"
 
 # Dataset paths
-project_root = "/vol/bitbucket/si324/rf-detr-wildfire"
-dataset_path = "/vol/bitbucket/si324/rf-detr-wildfire/data/pyro25img/images/test" # Test images directory
-annotations_path = f"{dataset_path}/_annotations.coco.json" # COCO format annotations
+DATASET_PATH = f"{PROJECT_ROOT}/data/pyro25img/images/test"
+ANNOTATIONS_PATH = f"{DATASET_PATH}/_annotations.coco.json"
+
+# Output paths
+EXPERIMENT_DIR = f"{PROJECT_ROOT}/outputs/{EXPERIMENT_NAME}"
+CHECKPOINTS_DIR = f"{EXPERIMENT_DIR}/checkpoints"
+EVAL_RESULTS_DIR = f"{EXPERIMENT_DIR}/eval_results"
+PLOTS_DIR = f"{EXPERIMENT_DIR}/plots"
+
+# Evaluation parameters (PyroNear methodology)
+CONFIDENCE_THRESHOLDS = np.arange(0.1, 0.9, 0.05)
+SPATIAL_IOU_THRESHOLD = 0.1  # PyroNear baseline
+
+# Create output directories
+os.makedirs(EVAL_RESULTS_DIR, exist_ok=True)
+os.makedirs(PLOTS_DIR, exist_ok=True)
+
+print(f"🎯 RF-DETR Wildfire Smoke Detection Evaluation")
+print(f"📁 Experiment: {EXPERIMENT_NAME}")
 
 # ============================================================================
-# OUTPUT DIRECTORY SETUP
+# LOAD YOLO BASELINE FOR COMPARISON
 # ============================================================================
-# Use same organized structure as training
-outputs_root = os.path.join(project_root, "outputs")
-experiment_dir = os.path.join(outputs_root, EXPERIMENT_NAME)
-
-# Define subdirectories
-checkpoints_dir = os.path.join(experiment_dir, "checkpoints")
-plots_dir = os.path.join(experiment_dir, "plots") 
-logs_dir = os.path.join(experiment_dir, "logs")
-eval_results_dir = os.path.join(experiment_dir, "eval_results")
-
-# Create evaluation results directory if it doesn't exist
-os.makedirs(eval_results_dir, exist_ok=True)
-os.makedirs(plots_dir, exist_ok=True)
-
-print(f"🎯 Evaluating Experiment: {EXPERIMENT_NAME}")
-print(f"📁 Using checkpoint from: {checkpoints_dir}")
-print(f"📁 Saving evaluation results to: {eval_results_dir}")
-print(f"📁 Saving plots to: {plots_dir}")
+def load_yolo_baseline():
+    """Load YOLO baseline results for comparison"""
+    yolo_results_path = f"{PROJECT_ROOT}/outputs/yolo_baseline_v1/eval_results/summary_results.json"
+    
+    try:
+        with open(yolo_results_path, 'r') as f:
+            yolo_data = json.load(f)
+        
+        baseline = {
+            'f1_score': yolo_data['best_f1_score'],
+            'precision': yolo_data['best_precision'],
+            'recall': yolo_data['best_recall'],
+            'accuracy': yolo_data['best_accuracy']
+        }
+        
+        print(f"✅ Loaded YOLO baseline: F1={baseline['f1_score']:.4f}")
+        return baseline
+        
+    except FileNotFoundError:
+        print(f"⚠️  YOLO baseline file not found, using fallback values")
+        return {
+            'f1_score': 0.688,
+            'precision': 0.743,
+            'recall': 0.641,
+            'accuracy': 0.587
+        }
 
 # ============================================================================
 # MODEL INITIALIZATION
 # ============================================================================
-# Load model from the experiment's checkpoint directory
-checkpoint_path = os.path.join(checkpoints_dir, "weights", "best.pt")
-
-# Check if checkpoint exists
-if not os.path.exists(checkpoint_path):
-    print(f"❌ ERROR: Checkpoint not found at {checkpoint_path}")
-    print(f"   Make sure you've trained the model with experiment name: {EXPERIMENT_NAME}")
-    print(f"   Or update EXPERIMENT_NAME to match your trained model.")
-    exit(1)
-
-print(f"✅ Loading RT-DETR model from: {checkpoint_path}")
-model = RTDETR(checkpoint_path)
+def load_model():
+    """Load RF-DETR model from checkpoint"""
+    checkpoint_path = f"{CHECKPOINTS_DIR}/checkpoint_best_ema.pth"
+    
+    if not os.path.exists(checkpoint_path):
+        print(f"❌ Checkpoint not found: {checkpoint_path}")
+        exit(1)
+    
+    print(f"✅ Loading RF-DETR from: {checkpoint_path}")
+    return RFDETRBase(pretrain_weights=checkpoint_path)
 
 # ============================================================================
 # DATASET LOADING
 # ============================================================================
-# Load COCO annotations to identify which images have smoke annotations
-with open(annotations_path, 'r') as f:
-    coco_data = json.load(f)
-
-# Get all image files in the test directory (smoke + no-smoke)
-all_image_files = [f for f in os.listdir(dataset_path) 
-                   if f.lower().endswith(('.jpg', '.jpeg', '.png', '.bmp'))]
-
-# Extract filenames of images that have annotations (smoke images)
-annotated_images = {img['file_name'] for img in coco_data['images']}
-
-# Separate images into smoke and no-smoke categories
-smoke_images = [f for f in all_image_files if f in annotated_images] # Images with smoke annotations
-no_smoke_images = [f for f in all_image_files if f not in annotated_images] # Images without smoke annotations
-
-# Print dataset composition for transparency
-print(f"\n📊 Dataset Composition:")
-print(f"  Total test images: {len(all_image_files)}")
-print(f"  Smoke images (with annotations): {len(smoke_images)}")
-print(f"  No-smoke images (without annotations): {len(no_smoke_images)}")
-
-# Load COCO dataset for smoke images (images with annotations)
-ds_smoke = sv.DetectionDataset.from_coco(
-    images_directory_path=dataset_path,
-    annotations_path=annotations_path
-)
-
-# Initialize lists to store predictions and ground truth
-predictions = []  # Model predictions for all images
-targets = []      # Ground truth annotations for all images
-image_labels = [] # Track whether each image contains smoke
-
-# Evaluation parameters 
-DETECTION_THRESHOLD = 0.2  # Low threshold since smoke boundaries are subjective
-SPATIAL_IOU_THRESHOLD = 0.4  # IoU threshold for spatial correctness 
-
-def ultralytics_to_supervision(results, confidence_threshold=0.2):
-    """
-    Convert Ultralytics YOLO results to supervision Detections format
-    """
-    if len(results) == 0 or results[0].boxes is None:
-        return sv.Detections.empty()
+def load_dataset():
+    """Load COCO dataset for evaluation"""
+    if not os.path.exists(ANNOTATIONS_PATH):
+        print(f"❌ Annotations not found: {ANNOTATIONS_PATH}")
+        exit(1)
     
-    boxes = results[0].boxes
-    if len(boxes) == 0:
-        return sv.Detections.empty()
-    
-    # Filter by confidence
-    confidences = boxes.conf.cpu().numpy()
-    valid_indices = confidences >= confidence_threshold
-    
-    if not np.any(valid_indices):
-        return sv.Detections.empty()
-    
-    # Extract valid detections
-    xyxy = boxes.xyxy[valid_indices].cpu().numpy()
-    confidence = confidences[valid_indices]
-    class_id = boxes.cls[valid_indices].cpu().numpy().astype(int)
-    
-    return sv.Detections(
-        xyxy=xyxy,
-        confidence=confidence,
-        class_id=class_id
+    ds = sv.DetectionDataset.from_coco(
+        images_directory_path=DATASET_PATH,
+        annotations_path=ANNOTATIONS_PATH
     )
-
-print(f"\n🔍 Evaluating smoke images (threshold={DETECTION_THRESHOLD}, spatial_iou={SPATIAL_IOU_THRESHOLD})...")
-# Process all smoke images (those with annotations)
-for path, image, annotations in tqdm(ds_smoke):
-    # Run model inference using Ultralytics
-    results = model.predict(path, conf=DETECTION_THRESHOLD, verbose=False)
     
-    # Convert to supervision format
-    detections = ultralytics_to_supervision(results, DETECTION_THRESHOLD)
-    
-    predictions.append(detections)  # Store model predictions
-    targets.append(annotations)     # Store ground truth annotations
-    image_labels.append("smoke")    # Mark as smoke image
-
-print(f"🔍 Evaluating no-smoke images...")
-# Process all no-smoke images (those without annotations)
-for img_file in tqdm(no_smoke_images):
-    img_path = os.path.join(dataset_path, img_file)  # Build full image path
-    
-    # Run model inference using Ultralytics
-    results = model.predict(img_path, conf=DETECTION_THRESHOLD, verbose=False)
-    
-    # Convert to supervision format
-    detections = ultralytics_to_supervision(results, DETECTION_THRESHOLD)
-    
-    # Create empty annotations for no-smoke images (no ground truth boxes)
-    empty_annotations = sv.Detections.empty()
-    
-    predictions.append(detections)      # Store model predictions
-    targets.append(empty_annotations)   # Store empty ground truth
-    image_labels.append("no_smoke")     # Mark as no-smoke image
-
-# Normalize all class IDs to 0 (single class: smoke detection)
-for det in predictions:
-    if len(det.class_id) > 0:
-        det.class_id = np.zeros(len(det.class_id), dtype=int)  # Set all detections to class 0
-
-for ann in targets:
-    if len(ann.class_id) > 0:
-        ann.class_id = np.zeros(len(ann.class_id), dtype=int)  # Set all annotations to class 0
+    print(f"📊 Dataset loaded: {len(ds)} images with annotations")
+    return ds
 
 # ============================================================================
-# REFERENCE METRICS (mAP)
+# PYRONEAR-STYLE EVALUATION
 # ============================================================================
-print("\n📊 Computing mAP (Mean Average Precision) for reference...")
-map_metric = MeanAveragePrecision()
-map_result = map_metric.update(predictions, targets).compute()
-print("mAP Results (object detection metrics for reference):")
-print(f"  mAP@0.50:0.95: {map_result.map50_95:.4f}")  # mAP across IoU thresholds 0.5-0.95
-print(f"  mAP@0.50: {map_result.map50:.4f}")          # mAP at IoU threshold 0.5
-print(f"  mAP@0.75: {map_result.map75:.4f}")          # mAP at IoU threshold 0.75
-
-# Save mAP plot for reference
-map_plot_path = os.path.join(plots_dir, "map_plot.png")
-map_result.plot()  # Generate mAP plot
-plt.savefig(map_plot_path, dpi=150, bbox_inches='tight')  # Save plot to file
-plt.close()  # Close plot to free memory
-print(f"🖼️ mAP plot saved to: {map_plot_path}")
-
-# Generate and save confusion matrix to plots directory
-conf_matrix = sv.ConfusionMatrix.from_detections(
-    predictions=predictions,
-    targets=targets,
-    classes=["smoke"]
-)
-conf_matrix_path = os.path.join(plots_dir, "conf_matrix.png")
-conf_matrix.plot()  # Generate confusion matrix plot
-plt.savefig(conf_matrix_path, dpi=150, bbox_inches='tight')  # Save plot to file
-plt.close()  # Close plot to free memory
-print(f"🖼️ Confusion matrix saved to: {conf_matrix_path}")
-
-# ============================================================================
-# SPATIAL OVERLAP FUNCTION
-# ============================================================================
-def has_spatial_overlap(pred_detections, gt_detections, iou_threshold=SPATIAL_IOU_THRESHOLD):
+def has_spatial_overlap(predictions, ground_truth):
     """
-    Check if any prediction overlaps with ground truth with IoU >= threshold
-    This ensures we only count detections that are spatially correct (not boxing trees as smoke)
+    Check if predictions have spatial overlap with ground truth
+    Uses PyroNear's 0.1 IoU threshold for spatial matching
     """
-    if len(pred_detections.xyxy) == 0 or len(gt_detections.xyxy) == 0:
-        return False  # No overlap if either is empty
+    if len(predictions.xyxy) == 0 or len(ground_truth.xyxy) == 0:
+        return False
     
     # Convert to torch tensors for IoU calculation
-    pred_boxes = torch.tensor(pred_detections.xyxy, dtype=torch.float32)
-    gt_boxes = torch.tensor(gt_detections.xyxy, dtype=torch.float32)
+    pred_boxes = torch.tensor(predictions.xyxy, dtype=torch.float32)
+    gt_boxes = torch.tensor(ground_truth.xyxy, dtype=torch.float32)
     
-    # Calculate IoU matrix between all prediction and ground truth boxes
-    iou_matrix = box_iou(pred_boxes, gt_boxes)
+    # Calculate IoU matrix and check for sufficient overlap
+    ious = box_iou(pred_boxes, gt_boxes)
+    return (ious > SPATIAL_IOU_THRESHOLD).any().item()
+
+def evaluate_at_confidence(model, dataset, confidence_threshold):
+    """
+    Evaluate model at a single confidence threshold
+    Returns TP, FP, FN, TN counts 
+    """
+    tp = fp = fn = tn = 0
+    total_images = len(dataset)
     
-    # Return True if any prediction has sufficient overlap with any GT box
-    return torch.max(iou_matrix) >= iou_threshold
+    for path, image, annotations in dataset:
+        # Get model predictions
+        predictions = model.predict(image, threshold=confidence_threshold)
+        
+        # Check for smoke presence
+        has_smoke_gt = len(annotations.xyxy) > 0
+        has_smoke_pred = len(predictions.xyxy) > 0
 
-# ============================================================================
-#  EVALUATION: SPATIALLY-AWARE BINARY CLASSIFICATION
-# ============================================================================
-print(f"\n🔥 PRIMARY EVALUATION: Spatially-Aware Binary Image Classification")
-print(f"   (Pyronear methodology + spatial validation)")
+        if has_smoke_gt:
+            # Ground truth has smoke - check for spatial overlap
+            spatial_match = has_spatial_overlap(predictions, annotations) if has_smoke_pred else False
+            
+            if spatial_match:
+                tp += 1  # True Positive: Correct detection with spatial overlap
+            else:
+                fn += 1  # False Negative: Missed detection or no prediction
+        else:
+            # Ground truth has no smoke (empty scene)
+            if has_smoke_pred:
+                fp += 1  # False Positive: False alarm on empty scene
+            else:
+                tn += 1  # True Negative: Correctly identified empty scene
 
-# Initialize binary classification labels
-y_true_binary = []  # Ground truth: 1=smoke image, 0=no-smoke image  
-y_pred_binary = []  # Prediction: 1=correct smoke detection, 0=no correct detection
-
-# Convert object detection results to spatially-aware binary classification
-for i, (pred, target, label) in enumerate(zip(predictions, targets, image_labels)):
-    # Ground truth label: 1 if image contains smoke, 0 if no smoke
-    y_true_binary.append(1 if label == "smoke" else 0)
     
-    if label == "smoke":
-        # For smoke images: check if detection spatially overlaps with ground truth
-        # Only count as positive if model detects smoke in approximately correct location
-        has_correct_detection = has_spatial_overlap(pred, target, SPATIAL_IOU_THRESHOLD)
-        y_pred_binary.append(1 if has_correct_detection else 0)
-    else:
-        # For no-smoke images: any detection is incorrect (false positive)
-        # Even if model detects something, it should be 0 since there's no smoke
-        y_pred_binary.append(1 if len(pred.xyxy) > 0 else 0)
+    return tp, fp, fn, tn, total_images
 
-# Calculate primary classification metrics (as used in Pyronear paper)
-binary_precision = precision_score(y_true_binary, y_pred_binary, zero_division="warn")
-binary_recall = recall_score(y_true_binary, y_pred_binary, zero_division="warn")
-binary_f1 = f1_score(y_true_binary, y_pred_binary, zero_division="warn")
-binary_accuracy = accuracy_score(y_true_binary, y_pred_binary)
+def calculate_metrics(tp, fp, fn, tn, total_images):
+    """Calculate evaluation metrics"""
+    precision = tp / (tp + fp) if (tp + fp) > 0 else 0.0
+    recall = tp / (tp + fn) if (tp + fn) > 0 else 0.0
+    f1_score = 2 * (precision * recall) / (precision + recall) if (precision + recall) > 0 else 0.0
+    accuracy = (tp + tn) / total_images if total_images > 0 else 0.0
+    
+    return precision, recall, f1_score, accuracy
 
-# Display primary metrics (main results following Pyronear methodology)
-print(f"\n✅ PRIMARY METRICS (Spatially-Aware Image-level Classification):")
-print(f"   Precision: {binary_precision:.4f} - Detected smoke images that actually contain smoke in correct location")
-print(f"   Recall:    {binary_recall:.4f} - Smoke images correctly detected with proper spatial overlap") 
-print(f"   F1 Score:  {binary_f1:.4f} - Harmonic mean of spatially-aware precision and recall")
-print(f"   Accuracy:  {binary_accuracy:.4f} - Overall correct spatially-aware classifications")
-
-# Calculate and display confusion matrix components for detailed analysis
-TP = sum(1 for gt, pred in zip(y_true_binary, y_pred_binary) if gt == 1 and pred == 1)  # True Positives
-TN = sum(1 for gt, pred in zip(y_true_binary, y_pred_binary) if gt == 0 and pred == 0)  # True Negatives  
-FP = sum(1 for gt, pred in zip(y_true_binary, y_pred_binary) if gt == 0 and pred == 1)  # False Positives
-FN = sum(1 for gt, pred in zip(y_true_binary, y_pred_binary) if gt == 1 and pred == 0)  # False Negatives
-
-print(f"\n📈 DETAILED BREAKDOWN:")
-print(f"   True Positives (TP):  {TP} - Smoke images with spatially correct detections")
-print(f"   True Negatives (TN):  {TN} - No-smoke images correctly identified as no-smoke") 
-print(f"   False Positives (FP): {FP} - No-smoke images with false smoke detections")
-print(f"   False Negatives (FN): {FN} - Smoke images missed or with spatially incorrect detections")
+def evaluate_model(model, dataset):
+    """
+    Evaluate RF-DETR across multiple confidence thresholds
+    Uses PyroNear methodology for direct comparison
+    """
+    print(f"\n🔥 Running evaluation across {len(CONFIDENCE_THRESHOLDS)} confidence thresholds...")
+    
+    results = []
+    
+    for conf_threshold in tqdm(CONFIDENCE_THRESHOLDS, desc="Evaluating"):
+        # Evaluate at this confidence threshold
+        tp, fp, fn, tn, total_images = evaluate_at_confidence(model, dataset, conf_threshold)
+        
+        # Calculate metrics
+        precision, recall, f1_score, accuracy = calculate_metrics(tp, fp, fn, tn, total_images)
+        
+        # Store results
+        result = {
+            'confidence_threshold': float(conf_threshold),
+            'precision': precision,
+            'recall': recall,
+            'f1_score': f1_score,
+            'accuracy': accuracy,
+            'tp': tp,
+            'fp': fp,
+            'fn': fn,
+            'tn': tn
+        }
+        results.append(result)
+        
+        print(f"Conf {conf_threshold:.2f}: P={precision:.3f}, R={recall:.3f}, F1={f1_score:.3f}, Acc={accuracy:.3f}")
+    
+    return results
 
 # ============================================================================
-# SAVE RESULTS
+# VISUALIZATION
 # ============================================================================
-# Compile all results into a structured dictionary for saving
-results = {
-    "experiment_info": {
-        "experiment_name": EXPERIMENT_NAME,
-        "checkpoint_used": checkpoint_path,
-        "dataset_path": dataset_path,
-        "model_type": "RT-DETR"
-    },
-    "evaluation_settings": {
-        "detection_threshold": DETECTION_THRESHOLD,
-        "spatial_iou_threshold": SPATIAL_IOU_THRESHOLD,
-        "evaluation_approach": "spatially_aware_binary_classification"
-    },
-    "dataset_composition": {
-        "total_images": len(all_image_files),
-        "smoke_images": len(smoke_images), 
-        "no_smoke_images": len(no_smoke_images)
-    },
-    "primary_metrics": {  
-        "precision": float(binary_precision),
-        "recall": float(binary_recall),
-        "f1_score": float(binary_f1),
-        "accuracy": float(binary_accuracy)
-    },
-    "confusion_matrix": {  
-        "true_positives": int(TP),
-        "true_negatives": int(TN), 
-        "false_positives": int(FP),
-        "false_negatives": int(FN)
-    },
-    "reference_metrics": { 
-        "mAP_50_95": float(map_result.map50_95),
-        "mAP_50": float(map_result.map50),
-        "mAP_75": float(map_result.map75)
+def create_evaluation_plot(results):
+    """Create evaluation metrics plot"""
+    conf_vals = [r['confidence_threshold'] for r in results]
+    f1_scores = [r['f1_score'] for r in results]
+    precisions = [r['precision'] for r in results]
+    recalls = [r['recall'] for r in results]
+    accuracies = [r['accuracy'] for r in results]
+    
+    # Find best F1 score
+    best_idx = np.argmax(f1_scores)
+    best_conf = conf_vals[best_idx]
+    best_f1 = f1_scores[best_idx]
+    
+    # Create plot
+    plt.figure(figsize=(12, 8))
+    plt.plot(conf_vals, f1_scores, 'b-o', label='F1 Score', linewidth=2)
+    plt.plot(conf_vals, precisions, 'g--', label='Precision')
+    plt.plot(conf_vals, recalls, 'r-.', label='Recall')
+    plt.plot(conf_vals, accuracies, 'm:', label='Spatial Accuracy')
+    
+    # Highlight best point
+    plt.scatter(best_conf, best_f1, color='blue', s=100, edgecolor='black', zorder=5)
+    plt.text(best_conf, best_f1, f'Best F1: {best_f1:.3f}\n@conf={best_conf:.2f}', 
+             fontsize=10, ha='center', va='bottom')
+    
+    plt.title('RF-DETR Performance vs Confidence Threshold', fontsize=14)
+    plt.xlabel('Confidence Threshold')
+    plt.ylabel('Metric Value')
+    plt.legend()
+    plt.grid(True, alpha=0.3)
+    plt.tight_layout()
+    
+    # Save plot
+    plot_path = f"{PLOTS_DIR}/evaluation_metrics.png"
+    plt.savefig(plot_path, dpi=150, bbox_inches='tight')
+    plt.close()
+    
+    print(f"📈 Plot saved: {plot_path}")
+    return plot_path
+
+def create_confusion_matrix(model, dataset, best_confidence):
+    """Create confusion matrix visualization"""
+    predictions_list = []
+    targets_list = []
+    
+    for path, image, annotations in tqdm(dataset, desc="Generating confusion matrix"):
+        predictions = model.predict(image, threshold=best_confidence)
+        
+        # Normalize class IDs to 0 (single smoke class)
+        if len(predictions.class_id) > 0:
+            predictions.class_id = np.zeros(len(predictions.class_id), dtype=int)
+        if len(annotations.class_id) > 0:
+            annotations.class_id = np.zeros(len(annotations.class_id), dtype=int)
+        
+        predictions_list.append(predictions)
+        targets_list.append(annotations)
+    
+    # Create and save confusion matrix
+    conf_matrix = sv.ConfusionMatrix.from_detections(
+        predictions=predictions_list,
+        targets=targets_list,
+        classes=["smoke"]
+    )
+    
+    conf_matrix.plot()
+    matrix_path = f"{PLOTS_DIR}/confusion_matrix.png"
+    plt.savefig(matrix_path, dpi=150, bbox_inches='tight')
+    plt.close()
+    
+    print(f"🎯 Confusion matrix saved: {matrix_path}")
+    return matrix_path
+
+# ============================================================================
+# RESULTS SAVING
+# ============================================================================
+def save_results(results, yolo_baseline):
+    """Save comprehensive evaluation results"""
+    # Find best result
+    best_result = max(results, key=lambda x: x['f1_score'])
+    
+    # Calculate improvement over YOLO baseline
+    improvement = best_result['f1_score'] - yolo_baseline['f1_score']
+    improvement_percent = (improvement / yolo_baseline['f1_score']) * 100
+    
+    # Compile comprehensive results
+    evaluation_data = {
+        "experiment_info": {
+            "experiment_name": EXPERIMENT_NAME,
+            "spatial_iou_threshold": SPATIAL_IOU_THRESHOLD,
+            "dataset_path": DATASET_PATH
+        },
+        "best_results": {
+            "confidence_threshold": best_result['confidence_threshold'],
+            "f1_score": best_result['f1_score'],
+            "precision": best_result['precision'],
+            "recall": best_result['recall'],
+            "accuracy": best_result['accuracy']
+        },
+         "confusion_matrix": {  
+            "true_positives": int(best_result["tp"]),
+            "true_negatives": int(best_result["tn"]),
+            "false_positives": int(best_result["fp"]),
+            "false_negatives": int(best_result["fn"])
+        },
+        "baseline_comparison": {
+            "yolo_baseline": yolo_baseline,
+            "rfdetr_results": {
+                "f1_score": best_result['f1_score'],
+                "precision": best_result['precision'],
+                "recall": best_result['recall'],
+                "accuracy": best_result['accuracy']
+            },
+            "improvement": {
+                "f1_absolute": improvement,
+                "f1_relative_percent": improvement_percent
+            }
+        },
+        "detailed_results": results
     }
-}
+    
+    # Save JSON results
+    results_path = f"{EVAL_RESULTS_DIR}/evaluation_results.json"
+    with open(results_path, 'w') as f:
+        json.dump(evaluation_data, f, indent=2)
+    
+    # Save comparison summary
+    summary_path = f"{EVAL_RESULTS_DIR}/comparison_summary.txt"
+    with open(summary_path, 'w') as f:
+        f.write("RF-DETR vs YOLO Baseline Comparison\n")
+        f.write("=" * 40 + "\n\n")
+        f.write("YOLO Baseline Results:\n")
+        f.write(f"  F1 Score:  {yolo_baseline['f1_score']:.4f}\n")
+        f.write(f"  Precision: {yolo_baseline['precision']:.4f}\n")
+        f.write(f"  Recall:    {yolo_baseline['recall']:.4f}\n")
+        f.write(f"  Accuracy:  {yolo_baseline['accuracy']:.4f}\n\n")
+        f.write("RF-DETR Results:\n")
+        f.write(f"  F1 Score:  {best_result['f1_score']:.4f}\n")
+        f.write(f"  Precision: {best_result['precision']:.4f}\n")
+        f.write(f"  Recall:    {best_result['recall']:.4f}\n")
+        f.write(f"  Accuracy:  {best_result['accuracy']:.4f}\n\n")
+        f.write("Improvement:\n")
+        f.write(f"  F1 Score: {improvement:+.4f} ({improvement_percent:+.1f}%)\n")
+    
+    print(f"💾 Results saved:")
+    print(f"  📄 Detailed: {results_path}")
+    print(f"  📊 Summary: {summary_path}")
+    
+    return best_result, improvement_percent
 
-# Output directory for evaluation results
-EVAL_RESULTS_DIR = os.path.join(project_root, "outputs", EXPERIMENT_NAME, "eval_results")
-os.makedirs(EVAL_RESULTS_DIR, exist_ok=True)
+# ============================================================================
+# MAIN EXECUTION
+# ============================================================================
+def main():
+    """Main evaluation pipeline"""
+    print("🚀 Starting RF-DETR evaluation...")
+    
+    # Load components
+    yolo_baseline = load_yolo_baseline()
+    model = load_model()
+    dataset = load_dataset()
+    
+    # Run evaluation
+    results = evaluate_model(model, dataset)
+    
+    # Create visualizations
+    create_evaluation_plot(results)
+    
+    # Find best result for confusion matrix
+    best_result = max(results, key=lambda x: x['f1_score'])
+    create_confusion_matrix(model, dataset, best_result['confidence_threshold'])
+    
+    # Save results
+    best_result, improvement_percent = save_results(results, yolo_baseline)
+    
+    # Print final summary
+    print(f"\n🏆 EVALUATION COMPLETE!")
+    print(f"   RF-DETR F1 Score: {best_result['f1_score']:.4f}")
+    print(f"   YOLO Baseline F1: {yolo_baseline['f1_score']:.4f}")
+    print(f"   Improvement: {improvement_percent:+.1f}%")
+    print(f"   Best Confidence: {best_result['confidence_threshold']:.2f}")
+    print(f"🔢 Confusion Matrix - TP: {best_result['tp']}, TN: {best_result['tn']}, FP: {best_result['fp']}, FN: {best_result['fn']}")
+    print(f"\n✅ All results saved to: {EVAL_RESULTS_DIR}")
 
-# Save results to JSON file in eval_results directory
-results_path = os.path.join(EVAL_RESULTS_DIR, "evaluation_results.json")
-with open(results_path, 'w') as f:
-    json.dump(results, f, indent=2)
-
-# Save a summary report 
-summary_path = os.path.join(EVAL_RESULTS_DIR, "evaluation_summary.txt")
-with open(summary_path, 'w') as f:
-    f.write(f"RT-DETR Experiment: {EXPERIMENT_NAME}\n")
-    f.write(f"="*50 + "\n\n")
-    f.write(f"PRIMARY METRICS:\n")
-    f.write(f"  Precision: {binary_precision:.4f}\n")
-    f.write(f"  Recall:    {binary_recall:.4f}\n") 
-    f.write(f"  F1 Score:  {binary_f1:.4f}\n")
-    f.write(f"  Accuracy:  {binary_accuracy:.4f}\n\n")
-    f.write(f"CONFUSION MATRIX:\n")
-    f.write(f"  TP: {TP}, TN: {TN}, FP: {FP}, FN: {FN}\n\n")
-    f.write(f"REFERENCE METRICS:\n")
-    f.write(f"  mAP@0.50:0.95: {map_result.map50_95:.4f}\n")
-    f.write(f"  mAP@0.50: {map_result.map50:.4f}\n")
-
-print(f"\n💾 Complete results saved to:")
-print(f"  📄 JSON: {results_path}")
-print(f"  📄 Summary: {summary_path}")
-print(f"  🖼️ Plots: {plots_dir}")
-print(f"\n🎯 SUMMARY:")
-print(f"   Experiment: {EXPERIMENT_NAME}")
-print(f"   F1 Score: {binary_f1:.4f} ")
-print(f"   This evaluation ensures detections overlap with ground truth locations.")
-print(f"   (IoU >= {SPATIAL_IOU_THRESHOLD}).") 
+if __name__ == "__main__":
+    main()

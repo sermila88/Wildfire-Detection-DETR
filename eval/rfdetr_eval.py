@@ -1,296 +1,389 @@
-import os  
-import supervision as sv 
-from tqdm import tqdm  
-from supervision.metrics import MeanAveragePrecision 
-from PIL import Image  
-import numpy as np  
-from rfdetr.detr import RFDETRBase  
-import matplotlib.pyplot as plt 
-import json 
-from torchvision.ops import box_iou 
+"""
+RF-DETR Evaluation Script for Wildfire Smoke Detection
+Uses PyroNear methodology for baseline comparison
+"""
+
+import os
+import json
+import numpy as np
+import matplotlib.pyplot as plt
+from pathlib import Path
+from tqdm import tqdm
+from PIL import Image
 import torch
+from torchvision.ops import box_iou
+import supervision as sv
+from rfdetr import RFDETRBase
 
 # ============================================================================
-# EXPERIMENT CONFIGURATION
+# CONFIGURATION
 # ============================================================================
-EXPERIMENT_NAME = "rfdetr_smoke_detection_v1"  # Change this to match your training experiment
+EXPERIMENT_NAME = "rfdetr_smoke_detection_v1"
+PROJECT_ROOT = "/vol/bitbucket/si324/rf-detr-wildfire"
 
-# Dataset paths 
-project_root = "/vol/bitbucket/si324/rf-detr-wildfire"
-dataset_path = "/vol/bitbucket/si324/rf-detr-wildfire/data/pyro25img/images/test" 
-annotations_path = f"{dataset_path}/_annotations.coco.json"
+# Dataset paths
+DATASET_PATH = f"{PROJECT_ROOT}/data/pyro25img/images/test"
+ANNOTATIONS_PATH = f"{DATASET_PATH}/_annotations.coco.json"
+
+# Output paths
+EXPERIMENT_DIR = f"{PROJECT_ROOT}/outputs/{EXPERIMENT_NAME}"
+CHECKPOINTS_DIR = f"{EXPERIMENT_DIR}/checkpoints"
+EVAL_RESULTS_DIR = f"{EXPERIMENT_DIR}/eval_results"
+PLOTS_DIR = f"{EXPERIMENT_DIR}/plots"
+
+# Evaluation parameters (PyroNear methodology)
+CONFIDENCE_THRESHOLDS = np.arange(0.1, 0.9, 0.05)
+SPATIAL_IOU_THRESHOLD = 0.1  # PyroNear baseline
+
+# Create output directories
+os.makedirs(EVAL_RESULTS_DIR, exist_ok=True)
+os.makedirs(PLOTS_DIR, exist_ok=True)
+
+print(f"🎯 RF-DETR Wildfire Smoke Detection Evaluation")
+print(f"📁 Experiment: {EXPERIMENT_NAME}")
 
 # ============================================================================
-# OUTPUT DIRECTORY SETUP
+# LOAD YOLO BASELINE FOR COMPARISON
 # ============================================================================
-outputs_root = os.path.join(project_root, "outputs")
-experiment_dir = os.path.join(outputs_root, EXPERIMENT_NAME)
-checkpoints_dir = os.path.join(experiment_dir, "checkpoints")
-plots_dir = os.path.join(experiment_dir, "plots") 
-eval_results_dir = os.path.join(experiment_dir, "eval_results")
-
-# Create directories
-os.makedirs(eval_results_dir, exist_ok=True)
-os.makedirs(plots_dir, exist_ok=True)
-
-print(f"🎯 Evaluating Experiment: {EXPERIMENT_NAME}")
-print(f"📁 Using checkpoint from: {checkpoints_dir}")
-print(f"📁 Saving evaluation results to: {eval_results_dir}")
+def load_yolo_baseline():
+    """Load YOLO baseline results for comparison"""
+    yolo_results_path = f"{PROJECT_ROOT}/outputs/yolo_baseline_v1/eval_results/summary_results.json"
+    
+    try:
+        with open(yolo_results_path, 'r') as f:
+            yolo_data = json.load(f)
+        
+        baseline = {
+            'f1_score': yolo_data['best_f1_score'],
+            'precision': yolo_data['best_precision'],
+            'recall': yolo_data['best_recall'],
+            'accuracy': yolo_data['best_accuracy']
+        }
+        
+        print(f"✅ Loaded YOLO baseline: F1={baseline['f1_score']:.4f}")
+        return baseline
+        
+    except FileNotFoundError:
+        print(f"⚠️  YOLO baseline file not found, using fallback values")
+        return {
+            'f1_score': 0.688,
+            'precision': 0.743,
+            'recall': 0.641,
+            'accuracy': 0.587
+        }
 
 # ============================================================================
 # MODEL INITIALIZATION
 # ============================================================================
-checkpoint_path = os.path.join(checkpoints_dir, "checkpoint_best_ema.pth")
-
-if not os.path.exists(checkpoint_path):
-    print(f"❌ ERROR: Checkpoint not found at {checkpoint_path}")
-    exit(1)
-
-print(f"✅ Loading model from: {checkpoint_path}")
-model = RFDETRBase(pretrain_weights=checkpoint_path)
-
-# ============================================================================
-# LOAD DATASET 
-# ============================================================================
-# Load COCO dataset - images WITH annotations
-ds = sv.DetectionDataset.from_coco(
-    images_directory_path=dataset_path,
-    annotations_path=annotations_path
-)
-
-print(f"📊 Dataset loaded: {len(ds)} images with annotations")
-
-# ============================================================================
-# EVALUATION FUNCTION
-# ============================================================================
-def evaluate_rfdetr(model, dataset, confidence_thresholds):
-    """
-    Evaluate RF-DETR using PyroNear methodology:
-    - Test multiple confidence thresholds
-    - Use 0.1 IoU threshold for spatial matching 
-    - Calculate Precision, Recall, F1, and Spatial Accuracy
-    """
+def load_model():
+    """Load RF-DETR model from checkpoint"""
+    checkpoint_path = f"{CHECKPOINTS_DIR}/checkpoint_best_ema.pth"
     
-    results_per_threshold = []
+    if not os.path.exists(checkpoint_path):
+        print(f"❌ Checkpoint not found: {checkpoint_path}")
+        exit(1)
     
-    for conf_threshold in tqdm(confidence_thresholds, desc="Testing confidence thresholds"):
-        tp, fp, fn, total_correct = 0, 0, 0, 0
-        total_images = len(dataset)
+    print(f"✅ Loading RF-DETR from: {checkpoint_path}")
+    return RFDETRBase(pretrain_weights=checkpoint_path)
+
+# ============================================================================
+# DATASET LOADING
+# ============================================================================
+def load_dataset():
+    """Load COCO dataset for evaluation"""
+    if not os.path.exists(ANNOTATIONS_PATH):
+        print(f"❌ Annotations not found: {ANNOTATIONS_PATH}")
+        exit(1)
+    
+    ds = sv.DetectionDataset.from_coco(
+        images_directory_path=DATASET_PATH,
+        annotations_path=ANNOTATIONS_PATH
+    )
+    
+    print(f"📊 Dataset loaded: {len(ds)} images with annotations")
+    return ds
+
+# ============================================================================
+# PYRONEAR-STYLE EVALUATION
+# ============================================================================
+def has_spatial_overlap(predictions, ground_truth):
+    """
+    Check if predictions have spatial overlap with ground truth
+    Uses PyroNear's 0.1 IoU threshold for spatial matching
+    """
+    if len(predictions.xyxy) == 0 or len(ground_truth.xyxy) == 0:
+        return False
+    
+    # Convert to torch tensors for IoU calculation
+    pred_boxes = torch.tensor(predictions.xyxy, dtype=torch.float32)
+    gt_boxes = torch.tensor(ground_truth.xyxy, dtype=torch.float32)
+    
+    # Calculate IoU matrix and check for sufficient overlap
+    ious = box_iou(pred_boxes, gt_boxes)
+    return (ious > SPATIAL_IOU_THRESHOLD).any().item()
+
+def evaluate_at_confidence(model, dataset, confidence_threshold):
+    """
+    Evaluate model at a single confidence threshold
+    Returns TP, FP, FN, TN counts 
+    """
+    tp = fp = fn = tn = 0
+    total_images = len(dataset)
+    
+    for path, image, annotations in dataset:
+        # Get model predictions
+        predictions = model.predict(image, threshold=confidence_threshold)
         
-        for i, (path, image_pil, annotations) in enumerate(dataset):
-            # Get predictions from RF-DETR
-            detections = model.predict(image_pil, threshold=conf_threshold)
+        # Check for smoke presence
+        has_smoke_gt = len(annotations.xyxy) > 0
+        has_smoke_pred = len(predictions.xyxy) > 0
+
+        if has_smoke_gt:
+            # Ground truth has smoke - check for spatial overlap
+            spatial_match = has_spatial_overlap(predictions, annotations) if has_smoke_pred else False
             
-            # Ground truth: does the image have smoke?
-            has_smoke_gt = len(annotations.xyxy) > 0 if annotations.xyxy is not None else False
-            
-            # Predictions: did we detect smoke?
-            has_smoke_pred = len(detections.xyxy) > 0 if detections.xyxy is not None else False
-            
-            # PyroNear spatial matching with 0.1 IoU threshold
-            spatial_match = False
-            if has_smoke_gt and has_smoke_pred:
-                pred_boxes = torch.tensor(detections.xyxy, dtype=torch.float32)
-                gt_boxes = torch.tensor(annotations.xyxy, dtype=torch.float32)
-                
-                if len(pred_boxes) > 0 and len(gt_boxes) > 0:
-                    ious = box_iou(pred_boxes, gt_boxes)
-                    spatial_match = (ious > 0.1).any().item()  # 0.1 threshold
-            
-            # Classification 
-            if has_smoke_gt and has_smoke_pred and spatial_match:
-                tp += 1  # Correct detection with spatial overlap
-                total_correct += 1
-            elif has_smoke_gt and has_smoke_pred and not spatial_match:
-                fp += 1  # Detection but wrong location
-            elif has_smoke_gt and not has_smoke_pred:
-                fn += 1  # Missed detection
-            elif not has_smoke_gt and has_smoke_pred:
-                fp += 1  # False alarm
-            elif not has_smoke_gt and not has_smoke_pred:
-                total_correct += 1  # True negative 
+            if spatial_match:
+                tp += 1  # True Positive: Correct detection with spatial overlap
+            else:
+                fn += 1  # False Negative: Missed detection or no prediction
+        else:
+            # Ground truth has no smoke (empty scene)
+            if has_smoke_pred:
+                fp += 1  # False Positive: False alarm on empty scene
+            else:
+                tn += 1  # True Negative: Correctly identified empty scene
+
+    
+    return tp, fp, fn, tn, total_images
+
+def calculate_metrics(tp, fp, fn, tn, total_images):
+    """Calculate evaluation metrics"""
+    precision = tp / (tp + fp) if (tp + fp) > 0 else 0.0
+    recall = tp / (tp + fn) if (tp + fn) > 0 else 0.0
+    f1_score = 2 * (precision * recall) / (precision + recall) if (precision + recall) > 0 else 0.0
+    accuracy = (tp + tn) / total_images if total_images > 0 else 0.0
+    
+    return precision, recall, f1_score, accuracy
+
+def evaluate_model(model, dataset):
+    """
+    Evaluate RF-DETR across multiple confidence thresholds
+    Uses PyroNear methodology for direct comparison
+    """
+    print(f"\n🔥 Running evaluation across {len(CONFIDENCE_THRESHOLDS)} confidence thresholds...")
+    
+    results = []
+    
+    for conf_threshold in tqdm(CONFIDENCE_THRESHOLDS, desc="Evaluating"):
+        # Evaluate at this confidence threshold
+        tp, fp, fn, tn, total_images = evaluate_at_confidence(model, dataset, conf_threshold)
         
-        # Calculate evaluation metrics
-        precision = tp / (tp + fp) if (tp + fp) > 0 else 0.0
-        recall = tp / (tp + fn) if (tp + fn) > 0 else 0.0
-        f1_score = 2 * (precision * recall) / (precision + recall) if (precision + recall) > 0 else 0.0
-        spatial_accuracy = total_correct / total_images if total_images > 0 else 0.0
+        # Calculate metrics
+        precision, recall, f1_score, accuracy = calculate_metrics(tp, fp, fn, tn, total_images)
         
-        results_per_threshold.append({
-            'confidence_threshold': conf_threshold,
+        # Store results
+        result = {
+            'confidence_threshold': float(conf_threshold),
             'precision': precision,
             'recall': recall,
             'f1_score': f1_score,
-            'spatial_accuracy': spatial_accuracy,
+            'accuracy': accuracy,
             'tp': tp,
             'fp': fp,
             'fn': fn,
-            'total_evaluated': total_images
-        })
+            'tn': tn
+        }
+        results.append(result)
         
-        print(f"Conf {conf_threshold:.2f}: P={precision:.3f}, R={recall:.3f}, F1={f1_score:.3f}, Acc={spatial_accuracy:.3f}")
+        print(f"Conf {conf_threshold:.2f}: P={precision:.3f}, R={recall:.3f}, F1={f1_score:.3f}, Acc={accuracy:.3f}")
     
-    return results_per_threshold
+    return results
 
 # ============================================================================
-# RUN PYRONEAR-STYLE EVALUATION
+# VISUALIZATION
 # ============================================================================
-print(f"\n🔥 RF-DETR EVALUATION")
-print("- Multiple confidence thresholds")
-print("- 0.1 IoU threshold for spatial matching")
-print("- Precision, Recall, F1, Spatial Accuracy metrics")
-
-# Test same confidence range as PyroNear
-confidence_thresholds = np.arange(0.1, 0.9, 0.05)
-print(f"📊 Testing {len(confidence_thresholds)} confidence thresholds: {confidence_thresholds[0]:.2f} to {confidence_thresholds[-1]:.2f}")
-
-# Run evaluation
-eval_results = evaluate_rfdetr(model, ds, confidence_thresholds)
-
-# Find best F1 score 
-best_result = max(eval_results, key=lambda x: x['f1_score'])
-best_f1 = best_result['f1_score']
-best_conf = best_result['confidence_threshold']
-
-print(f"\n🏆 BEST RESULTS:")
-print(f"   Best F1 Score: {best_f1:.4f}")
-print(f"   Best Confidence: {best_conf:.3f}")
-print(f"   Precision: {best_result['precision']:.4f}")
-print(f"   Recall: {best_result['recall']:.4f}")
-print(f"   Spatial Accuracy: {best_result['spatial_accuracy']:.4f}")
-
-# ============================================================================
-# SAVE PLOTS 
-# ============================================================================
-# Plot evaluation metrics vs confidence threshold
-conf_vals = [r['confidence_threshold'] for r in eval_results]
-f1_scores = [r['f1_score'] for r in eval_results]
-precisions = [r['precision'] for r in eval_results]
-recalls = [r['recall'] for r in eval_results]
-accuracies = [r['spatial_accuracy'] for r in eval_results]
-
-plt.figure(figsize=(12, 8))
-plt.plot(conf_vals, f1_scores, 'b-o', label='F1 Score', linewidth=2)
-plt.plot(conf_vals, precisions, 'g--', label='Precision')
-plt.plot(conf_vals, recalls, 'r-.', label='Recall')
-plt.plot(conf_vals, accuracies, 'm:', label='Spatial Accuracy')
-
-# Highlight best point
-plt.scatter(best_conf, best_f1, color='blue', s=100, edgecolor='black', zorder=5)
-plt.text(best_conf, best_f1, f'Best F1: {best_f1:.3f}\n@conf={best_conf:.2f}', 
-         fontsize=10, ha='center', va='bottom')
-
-plt.title('RF-DETR Performance vs Confidence Threshold', fontsize=14)
-plt.xlabel('Confidence Threshold')
-plt.ylabel('Metric Value')
-plt.legend()
-plt.grid(True, alpha=0.3)
-plt.tight_layout()
-
-eval_plot_path = os.path.join(plots_dir, "evaluation_metrics.png")
-plt.savefig(eval_plot_path, dpi=150, bbox_inches='tight')
-plt.close()
-
-# Get predictions at best confidence threshold for confusion matrix
-predictions_best = []
-targets_best = []
-
-for path, image_pil, annotations in tqdm(ds, desc="Getting predictions for visualization"):
-    detections = model.predict(image_pil, threshold=best_conf)
+def create_evaluation_plot(results):
+    """Create evaluation metrics plot"""
+    conf_vals = [r['confidence_threshold'] for r in results]
+    f1_scores = [r['f1_score'] for r in results]
+    precisions = [r['precision'] for r in results]
+    recalls = [r['recall'] for r in results]
+    accuracies = [r['accuracy'] for r in results]
     
-    # Normalize class IDs to 0 (single class)
-    if len(detections.class_id) > 0:
-        detections.class_id = np.zeros(len(detections.class_id), dtype=int)
-    if len(annotations.class_id) > 0:
-        annotations.class_id = np.zeros(len(annotations.class_id), dtype=int)
+    # Find best F1 score
+    best_idx = np.argmax(f1_scores)
+    best_conf = conf_vals[best_idx]
+    best_f1 = f1_scores[best_idx]
     
-    predictions_best.append(detections)
-    targets_best.append(annotations)
+    # Create plot
+    plt.figure(figsize=(12, 8))
+    plt.plot(conf_vals, f1_scores, 'b-o', label='F1 Score', linewidth=2)
+    plt.plot(conf_vals, precisions, 'g--', label='Precision')
+    plt.plot(conf_vals, recalls, 'r-.', label='Recall')
+    plt.plot(conf_vals, accuracies, 'm:', label='Spatial Accuracy')
+    
+    # Highlight best point
+    plt.scatter(best_conf, best_f1, color='blue', s=100, edgecolor='black', zorder=5)
+    plt.text(best_conf, best_f1, f'Best F1: {best_f1:.3f}\n@conf={best_conf:.2f}', 
+             fontsize=10, ha='center', va='bottom')
+    
+    plt.title('RF-DETR Performance vs Confidence Threshold', fontsize=14)
+    plt.xlabel('Confidence Threshold')
+    plt.ylabel('Metric Value')
+    plt.legend()
+    plt.grid(True, alpha=0.3)
+    plt.tight_layout()
+    
+    # Save plot
+    plot_path = f"{PLOTS_DIR}/evaluation_metrics.png"
+    plt.savefig(plot_path, dpi=150, bbox_inches='tight')
+    plt.close()
+    
+    print(f"📈 Plot saved: {plot_path}")
+    return plot_path
 
-# Save confusion matrix
-conf_matrix = sv.ConfusionMatrix.from_detections(
-    predictions=predictions_best,
-    targets=targets_best,
-    classes=["smoke"]
-)
-conf_matrix_path = os.path.join(plots_dir, "confusion_matrix.png")
-conf_matrix.plot()
-plt.savefig(conf_matrix_path, dpi=150, bbox_inches='tight')
-plt.close()
-
-print(f"🖼️ Plots saved:")
-print(f"  📈 Evaluation metrics: {eval_plot_path}")
-print(f"  🎯 Confusion matrix: {conf_matrix_path}")
+def create_confusion_matrix(model, dataset, best_confidence):
+    """Create confusion matrix visualization"""
+    predictions_list = []
+    targets_list = []
+    
+    for path, image, annotations in tqdm(dataset, desc="Generating confusion matrix"):
+        predictions = model.predict(image, threshold=best_confidence)
+        
+        # Normalize class IDs to 0 (single smoke class)
+        if len(predictions.class_id) > 0:
+            predictions.class_id = np.zeros(len(predictions.class_id), dtype=int)
+        if len(annotations.class_id) > 0:
+            annotations.class_id = np.zeros(len(annotations.class_id), dtype=int)
+        
+        predictions_list.append(predictions)
+        targets_list.append(annotations)
+    
+    # Create and save confusion matrix
+    conf_matrix = sv.ConfusionMatrix.from_detections(
+        predictions=predictions_list,
+        targets=targets_list,
+        classes=["smoke"]
+    )
+    
+    conf_matrix.plot()
+    matrix_path = f"{PLOTS_DIR}/confusion_matrix.png"
+    plt.savefig(matrix_path, dpi=150, bbox_inches='tight')
+    plt.close()
+    
+    print(f"🎯 Confusion matrix saved: {matrix_path}")
+    return matrix_path
 
 # ============================================================================
-# SAVE RESULTS 
+# RESULTS SAVING
 # ============================================================================
+def save_results(results, yolo_baseline):
+    """Save comprehensive evaluation results"""
+    # Find best result
+    best_result = max(results, key=lambda x: x['f1_score'])
+    
+    # Calculate improvement over YOLO baseline
+    improvement = best_result['f1_score'] - yolo_baseline['f1_score']
+    improvement_percent = (improvement / yolo_baseline['f1_score']) * 100
+    
+    # Compile comprehensive results
+    evaluation_data = {
+        "experiment_info": {
+            "experiment_name": EXPERIMENT_NAME,
+            "spatial_iou_threshold": SPATIAL_IOU_THRESHOLD,
+            "dataset_path": DATASET_PATH
+        },
+        "best_results": {
+            "confidence_threshold": best_result['confidence_threshold'],
+            "f1_score": best_result['f1_score'],
+            "precision": best_result['precision'],
+            "recall": best_result['recall'],
+            "accuracy": best_result['accuracy']
+        },
+         "confusion_matrix": {  
+            "true_positives": int(best_result["tp"]),
+            "true_negatives": int(best_result["tn"]),
+            "false_positives": int(best_result["fp"]),
+            "false_negatives": int(best_result["fn"])
+        },
+        "baseline_comparison": {
+            "yolo_baseline": yolo_baseline,
+            "rfdetr_results": {
+                "f1_score": best_result['f1_score'],
+                "precision": best_result['precision'],
+                "recall": best_result['recall'],
+                "accuracy": best_result['accuracy']
+            },
+            "improvement": {
+                "f1_absolute": improvement,
+                "f1_relative_percent": improvement_percent
+            }
+        },
+        "detailed_results": results
+    }
+    
+    # Save JSON results
+    results_path = f"{EVAL_RESULTS_DIR}/evaluation_results.json"
+    with open(results_path, 'w') as f:
+        json.dump(evaluation_data, f, indent=2)
+    
+    # Save comparison summary
+    summary_path = f"{EVAL_RESULTS_DIR}/comparison_summary.txt"
+    with open(summary_path, 'w') as f:
+        f.write("RF-DETR vs YOLO Baseline Comparison\n")
+        f.write("=" * 40 + "\n\n")
+        f.write("YOLO Baseline Results:\n")
+        f.write(f"  F1 Score:  {yolo_baseline['f1_score']:.4f}\n")
+        f.write(f"  Precision: {yolo_baseline['precision']:.4f}\n")
+        f.write(f"  Recall:    {yolo_baseline['recall']:.4f}\n")
+        f.write(f"  Accuracy:  {yolo_baseline['accuracy']:.4f}\n\n")
+        f.write("RF-DETR Results:\n")
+        f.write(f"  F1 Score:  {best_result['f1_score']:.4f}\n")
+        f.write(f"  Precision: {best_result['precision']:.4f}\n")
+        f.write(f"  Recall:    {best_result['recall']:.4f}\n")
+        f.write(f"  Accuracy:  {best_result['accuracy']:.4f}\n\n")
+        f.write("Improvement:\n")
+        f.write(f"  F1 Score: {improvement:+.4f} ({improvement_percent:+.1f}%)\n")
+    
+    print(f"💾 Results saved:")
+    print(f"  📄 Detailed: {results_path}")
+    print(f"  📊 Summary: {summary_path}")
+    
+    return best_result, improvement_percent
 
-# Load YOLO baseline results for comparison
-yolo_results_path = "/vol/bitbucket/si324/rf-detr-wildfire/outputs/yolo_baseline_v1/eval_results/summary_results.json"
-try:
-    with open(yolo_results_path, 'r') as f:
-        yolo_baseline = json.load(f)
-    yolo_f1_baseline = yolo_baseline['best_f1_score']
-    print(f"📊 Loaded YOLO baseline F1: {yolo_f1_baseline:.4f}")
-except FileNotFoundError:
-    print(f"⚠️  YOLO baseline file not found, using hardcoded value")
-    yolo_f1_baseline = 0.688
+# ============================================================================
+# MAIN EXECUTION
+# ============================================================================
+def main():
+    """Main evaluation pipeline"""
+    print("🚀 Starting RF-DETR evaluation...")
+    
+    # Load components
+    yolo_baseline = load_yolo_baseline()
+    model = load_model()
+    dataset = load_dataset()
+    
+    # Run evaluation
+    results = evaluate_model(model, dataset)
+    
+    # Create visualizations
+    create_evaluation_plot(results)
+    
+    # Find best result for confusion matrix
+    best_result = max(results, key=lambda x: x['f1_score'])
+    create_confusion_matrix(model, dataset, best_result['confidence_threshold'])
+    
+    # Save results
+    best_result, improvement_percent = save_results(results, yolo_baseline)
+    
+    # Print final summary
+    print(f"\n🏆 EVALUATION COMPLETE!")
+    print(f"   RF-DETR F1 Score: {best_result['f1_score']:.4f}")
+    print(f"   YOLO Baseline F1: {yolo_baseline['f1_score']:.4f}")
+    print(f"   Improvement: {improvement_percent:+.1f}%")
+    print(f"   Best Confidence: {best_result['confidence_threshold']:.2f}")
+    print(f"🔢 Confusion Matrix - TP: {best_result['tp']}, TN: {best_result['tn']}, FP: {best_result['fp']}, FN: {best_result['fn']}")
+    print(f"\n✅ All results saved to: {EVAL_RESULTS_DIR}")
 
-results = {
-    "experiment_info": {
-        "experiment_name": EXPERIMENT_NAME,
-        "checkpoint_used": checkpoint_path,
-        "dataset_path": dataset_path
-    },
-    "methodology": {
-        "spatial_iou_threshold": 0.1,
-        "confidence_thresholds_tested": confidence_thresholds.tolist(),
-    },
-    "best_results": {
-        "best_confidence_threshold": float(best_conf),
-        "best_f1_score": float(best_f1),
-        "best_precision": float(best_result['precision']),
-        "best_recall": float(best_result['recall']),
-        "best_spatial_accuracy": float(best_result['spatial_accuracy'])
-    },
-    "comparison_with_yolo_baseline": {
-    "yolo_f1_baseline": float(yolo_f1_baseline),  # Use loaded value
-    "rfdetr_f1": float(best_f1),
-    "improvement": float(best_f1 - yolo_f1_baseline),
-    "relative_improvement_percent": float((best_f1 - yolo_f1_baseline) / yolo_f1_baseline * 100)
-}
-}
-
-# Save comprehensive results
-results_path = os.path.join(eval_results_dir, "evaluation_results.json")
-with open(results_path, 'w') as f:
-    json.dump(results, f, indent=2)
-
-# Save PyroNear comparison summary
-comparison_path = os.path.join(eval_results_dir, "pyronear_comparison.txt")
-with open(comparison_path, 'w') as f:
-    f.write(f"RF-DETR vs YOLO Baseline (PyroNear Methodology)\n")
-    f.write(f"="*50 + "\n\n")
-    f.write(f"YOLO Baseline (from your evaluation):\n")
-    f.write(f"  F1 Score: 0.688\n")
-    f.write(f"  Precision: 0.743\n") 
-    f.write(f"  Recall: 0.641\n")
-    f.write(f"  Accuracy: 0.587\n\n")
-    f.write(f"RF-DETR Results:\n")
-    f.write(f"  F1 Score: {best_f1:.4f}\n")
-    f.write(f"  Precision: {best_result['precision']:.4f}\n")
-    f.write(f"  Recall: {best_result['recall']:.4f}\n")
-    f.write(f"  Accuracy: {best_result['spatial_accuracy']:.4f}\n\n")
-    f.write(f"IMPROVEMENT:\n")
-    f.write(f"  F1 Score: {best_f1 - 0.688:+.4f} ({(best_f1 - 0.688)/0.688*100:+.1f}%)\n")
-
-print(f"\n💾 Results saved:")
-print(f"  📄 Detailed: {results_path}")
-print(f"  📊 Comparison: {comparison_path}")
-
-print(f"\n🎯 FINAL SUMMARY:")
-print(f"   RF-DETR F1 Score: {best_f1:.4f}")
-print(f"   YOLO Baseline F1: 0.688")
-print(f"   Improvement: {best_f1 - 0.688:+.4f} ({(best_f1 - 0.688)/0.688*100:+.1f}%)")
-print(f"\n✅ Evaluation complete using PyroNear methodology for direct comparison!")
+if __name__ == "__main__":
+    main()
