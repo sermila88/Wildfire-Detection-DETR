@@ -90,18 +90,46 @@ def load_model():
 # DATASET LOADING
 # ============================================================================
 def load_dataset():
-    """Load COCO dataset for evaluation"""
+
+    """Load all test images (both annotated and non-annotated)"""
     if not os.path.exists(ANNOTATIONS_PATH):
         print(f"❌ Annotations not found: {ANNOTATIONS_PATH}")
         exit(1)
     
-    ds = sv.DetectionDataset.from_coco(
+    # Load COCO dataset for annotated images
+    coco_ds = sv.DetectionDataset.from_coco(
         images_directory_path=DATASET_PATH,
         annotations_path=ANNOTATIONS_PATH
     )
     
-    print(f"📊 Dataset loaded: {len(ds)} images with annotations")
-    return ds
+    # Get all test images
+    all_test_images = [f for f in os.listdir(DATASET_PATH) if f.lower().endswith(('.jpg', '.jpeg', '.png'))]
+    coco_images = {os.path.basename(path) for path, _, _ in coco_ds}
+    non_coco_images = [img for img in all_test_images if img not in coco_images]
+    
+    print(f"📊 Dataset composition:")
+    print(f"  Annotated images (COCO): {len(coco_ds)}")
+    print(f"  Non-annotated images: {len(non_coco_images)}")
+    print(f"  Total test images: {len(all_test_images)}")
+    
+    # Create combined dataset
+    combined_dataset = []
+    
+    # Add annotated images
+    for path, image, annotations in coco_ds:
+        combined_dataset.append((path, image, annotations))
+    
+    # Add non-annotated images with empty annotations
+    for img_name in non_coco_images:
+        img_path = os.path.join(DATASET_PATH, img_name)
+        if os.path.exists(img_path):
+            image = Image.open(img_path)
+            empty_annotations = sv.Detections.empty()
+            combined_dataset.append((img_path, image, empty_annotations))
+    
+    print(f"📊 Combined dataset: {len(combined_dataset)} images")
+    return combined_dataset
+
 
 # ============================================================================
 # PYRONEAR-STYLE EVALUATION
@@ -128,7 +156,6 @@ def evaluate_at_confidence(model, dataset, confidence_threshold):
     Returns TP, FP, FN, TN counts 
     """
     tp = fp = fn = tn = 0
-    total_images = len(dataset)
     
     for path, image, annotations in dataset:
         # Get model predictions
@@ -153,7 +180,7 @@ def evaluate_at_confidence(model, dataset, confidence_threshold):
             else:
                 tn += 1  # True Negative: Correctly identified empty scene
 
-    
+    total_images = len(dataset)
     return tp, fp, fn, tn, total_images
 
 def calculate_metrics(tp, fp, fn, tn, total_images):

@@ -13,19 +13,35 @@ os.makedirs(EVAL_DIR, exist_ok=True)
 def evaluate_predictions(pred_folder, gt_folder, conf_th=0.1, cat=None):
     nb_fp, nb_tp, nb_fn, nb_tn = 0, 0, 0, 0
 
+    # Get all test images (including non-annotated images)
+    test_images_dir = "/vol/bitbucket/si324/rf-detr-wildfire/data/pyro25img/images/test"
+    all_image_files = [f for f in os.listdir(test_images_dir) 
+                       if f.lower().endswith(('.jpg', '.jpeg', '.png'))]
+    all_filenames = [os.path.splitext(f)[0] for f in all_image_files]
+    
+    print(f"Processing {len(all_filenames)} total test images")  # Should print 536
 
-    gt_filenames = [
-        os.path.splitext(os.path.basename(f))[0]
-        for f in glob.glob(os.path.join(gt_folder, "*.txt"))
-    ]
-    pred_filenames = [
-        os.path.splitext(os.path.basename(f))[0]
-        for f in glob.glob(os.path.join(pred_folder, "*.txt"))
-    ]
 
-    all_filenames = set(gt_filenames + pred_filenames)
     if cat is not None:
         all_filenames = [f for f in all_filenames if cat == f.split("_")[0].lower()]
+
+    ## debug
+
+    # Add this debug section after collecting all_filenames:
+    print(f"Debug: Found {len(all_filenames)} image files")
+    print(f"Debug: First few filenames: {all_filenames[:5]}")
+
+    # Check how many have predictions
+    pred_files_exist = 0
+    for filename in all_filenames:
+        pred_file = os.path.join(pred_folder, f"{filename}.txt")
+        if os.path.isfile(pred_file):
+            pred_files_exist += 1
+
+    print(f"Debug: {pred_files_exist} files have prediction files")
+
+    ## debug
+
 
     for filename in all_filenames:
         gt_file = os.path.join(gt_folder, f"{filename}.txt")
