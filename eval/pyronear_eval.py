@@ -11,7 +11,11 @@ os.makedirs(EVAL_DIR, exist_ok=True)
 
 
 def evaluate_predictions(pred_folder, gt_folder, conf_th=0.1, cat=None):
-    nb_fp, nb_tp, nb_fn, nb_tn = 0, 0, 0, 0
+    # For object-level tracking:
+    obj_fp, obj_tp, obj_fn, obj_tn = 0, 0, 0, 0
+
+    # For image-level tracking:
+    img_tp, img_fp, img_fn, img_tn = 0, 0, 0, 0
 
     # Get all test images (including non-annotated images)
     test_images_dir = "/vol/bitbucket/si324/rf-detr-wildfire/data/pyro25img/images/test"
@@ -19,29 +23,10 @@ def evaluate_predictions(pred_folder, gt_folder, conf_th=0.1, cat=None):
                        if f.lower().endswith(('.jpg', '.jpeg', '.png'))]
     all_filenames = [os.path.splitext(f)[0] for f in all_image_files]
     
-    print(f"Processing {len(all_filenames)} total test images")  # Should print 536
-
+    print(f"Processing {len(all_filenames)} total test images")
 
     if cat is not None:
         all_filenames = [f for f in all_filenames if cat == f.split("_")[0].lower()]
-
-    ## debug
-
-    # Add this debug section after collecting all_filenames:
-    print(f"Debug: Found {len(all_filenames)} image files")
-    print(f"Debug: First few filenames: {all_filenames[:5]}")
-
-    # Check how many have predictions
-    pred_files_exist = 0
-    for filename in all_filenames:
-        pred_file = os.path.join(pred_folder, f"{filename}.txt")
-        if os.path.isfile(pred_file):
-            pred_files_exist += 1
-
-    print(f"Debug: {pred_files_exist} files have prediction files")
-
-    ## debug
-
 
     for filename in all_filenames:
         gt_file = os.path.join(gt_folder, f"{filename}.txt")
@@ -57,6 +42,7 @@ def evaluate_predictions(pred_folder, gt_folder, conf_th=0.1, cat=None):
 
         gt_matches = np.zeros(len(gt_boxes), dtype=bool)
 
+        # Object-level classification
         if os.path.isfile(pred_file) and os.path.getsize(pred_file) > 0:
             with open(pred_file, "r") as f:
                 pred_boxes = [line.strip().split(" ") for line in f.readlines()]
@@ -72,22 +58,22 @@ def evaluate_predictions(pred_folder, gt_folder, conf_th=0.1, cat=None):
                 pred_box = xywh2xyxy(np.array([x, y, w, h]))
 
                 if gt_boxes:
-                    # Encontrar la mejor coincidencia por IoU
+                    # Find the best match by IoU
                     iou_values = [box_iou(pred_box, gt_box) for gt_box in gt_boxes]
                     max_iou = max(iou_values)
                     best_match_idx = np.argmax(iou_values)
-
-                    # Verificar coincidencia válida y única
+                    
+                    # Check for a valid and unique match
                     if max_iou > 0.1 and not gt_matches[best_match_idx]:
-                        nb_tp += 1
+                        obj_tp += 1
                         gt_matches[best_match_idx] = True
                     else:
-                        nb_fp += 1
+                        obj_fp += 1
                 else:
-                    nb_fp += 1
+                    obj_fp += 1
 
         if gt_boxes:
-            nb_fn += len(gt_boxes) - np.sum(gt_matches)
+            obj_fn += len(gt_boxes) - np.sum(gt_matches)
 
 
         # Check if ground truth has any smoke boxes in this image
@@ -113,27 +99,82 @@ def evaluate_predictions(pred_folder, gt_folder, conf_th=0.1, cat=None):
                         continue
             
             if not has_valid_pred_above_thresh:
-                nb_tn += 1
+                obj_tn += 1
+
+        # Image-level classification (one result per image)
+        has_smoke_gt = len(gt_boxes) > 0
+        has_smoke_pred = os.path.isfile(pred_file) and os.path.getsize(pred_file) > 0
+        
+        # Check if any prediction above threshold overlaps with GT
+        spatial_match = False
+        if has_smoke_gt and has_smoke_pred:
+            spatial_match = np.sum(gt_matches) > 0  # Use existing gt_matches
+        
+        # Image-level counting
+        if has_smoke_gt:
+            if spatial_match:
+                img_tp += 1
+            else:
+                img_fn += 1
+        else:
+            if has_smoke_pred:
+                # Check if any pred above threshold
+                has_valid_pred = False
+                if os.path.isfile(pred_file) and os.path.getsize(pred_file) > 0:
+                    with open(pred_file, "r") as f:
+                        for line in f.readlines():
+                            try:
+                                conf = float(line.strip().split()[5])
+                                if conf >= conf_th:
+                                    has_valid_pred = True
+                                    break
+                            except:
+                                continue
+                if has_valid_pred:
+                    img_fp += 1
+                else:
+                    img_tn += 1
+            else:
+                img_tn += 1
+
 
     # Calculate spatial accuracy = (TP + TN) / Total images
-    spatial_accuracy = (nb_tp + nb_tn) / len(all_filenames) if len(all_filenames) > 0 else 0
+    obj_spatial_accuracy = (obj_tp + obj_tn) / len(all_filenames) if len(all_filenames) > 0 else 0
 
-    precision = nb_tp / (nb_tp + nb_fp) if (nb_tp + nb_fp) > 0 else 0
-    recall = nb_tp / (nb_tp + nb_fn) if (nb_tp + nb_fn) > 0 else 0
-    f1_score = (
-        2 * (precision * recall) / (precision + recall)
-        if (precision + recall) > 0
+    # Calculate OBJECT-LEVEL metrics 
+    obj_precision = obj_tp / (obj_tp + obj_fp) if (obj_tp + obj_fp) > 0 else 0
+    obj_recall = obj_tp / (obj_tp + obj_fn) if (obj_tp + obj_fn) > 0 else 0
+    obj_f1_score = (
+        2 * (obj_precision * obj_recall) / (obj_precision + obj_recall)
+        if (obj_precision + obj_recall) > 0
         else 0
     )
 
-    return {"precision": precision, 
-            "recall": recall, 
-            "f1_score": f1_score, 
-            "spatial_accuracy": spatial_accuracy, 
-            "nb_tp": nb_tp, 
-            "nb_fp": nb_fp, 
-            "nb_fn": nb_fn, 
-            "nb_tn": nb_tn}
+    # Calculate IMAGE-LEVEL metrics 
+    img_precision = img_tp / (img_tp + img_fp) if (img_tp + img_fp) > 0 else 0
+    img_recall = img_tp / (img_tp + img_fn) if (img_tp + img_fn) > 0 else 0  
+    img_f1_score = 2 * (img_precision * img_recall) / (img_precision + img_recall) if (img_precision + img_recall) > 0 else 0
+    img_accuracy = (img_tp + img_tn) / len(all_filenames) if len(all_filenames) > 0 else 0
+
+    return { #Object-level metrics 
+            "obj_precision": obj_precision, 
+            "obj_recall": obj_recall, 
+            "obj_f1_score": obj_f1_score, 
+            "obj_spatial_accuracy": obj_spatial_accuracy, 
+            "obj_tp": obj_tp, 
+            "obj_fp": obj_fp, 
+            "obj_fn": obj_fn, 
+            "obj_tn": obj_tn,
+
+            # Image-level metrics
+            "img_precision": img_precision,
+            "img_recall": img_recall, 
+            "img_f1_score": img_f1_score,
+            "img_accuracy": img_accuracy,
+            "img_tp": img_tp,
+            "img_fp": img_fp, 
+            "img_fn": img_fn,
+            "img_tn": img_tn}
 
 
 def find_best_conf_threshold(pred_folder, gt_folder, conf_thres_range, cat=None):
@@ -145,12 +186,12 @@ def find_best_conf_threshold(pred_folder, gt_folder, conf_thres_range, cat=None)
 
     for conf_thres in conf_thres_range:
         results = evaluate_predictions(pred_folder, gt_folder, conf_thres, cat)
-        if results["f1_score"] > best_f1_score:
+        if results["img_f1_score"] > best_f1_score:
             best_conf_thres = conf_thres
-            best_f1_score = results["f1_score"]
-            best_precision = results["precision"]
-            best_recall = results["recall"]
-            best_accuracy = results["spatial_accuracy"]
+            best_f1_score = results["img_f1_score"]
+            best_precision = results["img_precision"]
+            best_recall = results["img_recall"]
+            best_accuracy = results["img_accuracy"]
 
     return best_conf_thres, best_f1_score, best_precision, best_recall, best_accuracy
 
@@ -193,10 +234,10 @@ def find_best_conf_threshold_and_plot(
 
     for conf_thres in conf_thres_range:
         results = evaluate_predictions(pred_folder, gt_folder, conf_thres)
-        f1_scores.append(results["f1_score"])
-        precisions.append(results["precision"])
-        recalls.append(results["recall"])
-        accuracies.append(results["spatial_accuracy"])
+        f1_scores.append(results["img_f1_score"])
+        precisions.append(results["img_precision"])
+        recalls.append(results["img_recall"])
+        accuracies.append(results["img_accuracy"])
 
     # Find the best confidence threshold
     best_idx = np.argmax(f1_scores)
@@ -320,15 +361,35 @@ if __name__ == "__main__":
         summary = {
             "experiment_name": EXPERIMENT_NAME,
             "best_confidence_threshold": float(best_conf),
+
+            # IMAGE-LEVEL 
             "best_f1_score": float(best_f1),
             "best_precision": float(best_precision),
             "best_recall": float(best_recall),
             "best_accuracy": float(best_accuracy),
-            "confusion_matrix": {
-                "true_positives": int(final_results["nb_tp"]),
-                "true_negatives": int(final_results["nb_tn"]),
-                "false_positives": int(final_results["nb_fp"]),
-                "false_negatives": int(final_results["nb_fn"])
+            "object_level_confusion_matrix": {
+                "true_positives": int(final_results["obj_tp"]),
+                "true_negatives": int(final_results["obj_tn"]),
+                "false_positives": int(final_results["obj_fp"]),
+                "false_negatives": int(final_results["obj_fn"])
+            },
+            "image_level_confusion_matrix": {
+                "true_positives": int(final_results["img_tp"]),
+                "true_negatives": int(final_results["img_tn"]),
+                "false_positives": int(final_results["img_fp"]),
+                "false_negatives": int(final_results["img_fn"])
+            },
+            "object_level_metrics": {
+                "f1_score": float(final_results["obj_f1_score"]),
+                "precision": float(final_results["obj_precision"]),
+                "recall": float(final_results["obj_recall"]),
+                "accuracy": float(final_results["obj_spatial_accuracy"])
+            },
+            "image_level_metrics": {
+                "f1_score": float(final_results["img_f1_score"]),
+                "precision": float(final_results["img_precision"]),
+                "recall": float(final_results["img_recall"]),
+                "accuracy": float(final_results["img_accuracy"])
             },
             "evaluation_timestamp": datetime.now().isoformat(),
             "gt_folder": GT_FOLDER,
@@ -341,7 +402,8 @@ if __name__ == "__main__":
         print(f"\n🎉 EVALUATION COMPLETE!")
         print(f"🏆 Best F1: {best_f1:.3f} at confidence {best_conf:.3f}")
         print(f"📊 Precision: {best_precision:.3f}, Recall: {best_recall:.3f}, Accuracy: {best_accuracy:.3f}")
-        print(f"🔢 Confusion Matrix - TP: {final_results['nb_tp']}, TN: {final_results['nb_tn']}, FP: {final_results['nb_fp']}, FN: {final_results['nb_fn']}")
+        print(f"🔢 Object Level Confusion Matrix - TP: {final_results['obj_tp']}, TN: {final_results['obj_tn']}, FP: {final_results['obj_fp']}, FN: {final_results['obj_fn']}")
+        print(f"🔢 Image Level Confusion Matrix - TP: {final_results['img_tp']}, TN: {final_results['img_tn']}, FP: {final_results['img_fp']}, FN: {final_results['img_fn']}")
         print(f"📁 Results saved to: {EVAL_DIR}/")
         print(f"📈 Plot saved to: {EVAL_DIR}/metrics.png")
         
