@@ -12,7 +12,7 @@ os.makedirs(EVAL_DIR, exist_ok=True)
 
 def evaluate_predictions(pred_folder, gt_folder, conf_th=0.1, cat=None):
     # For object-level tracking:
-    obj_fp, obj_tp, obj_fn, obj_tn = 0, 0, 0, 0
+    obj_fp, obj_tp, obj_fn = 0, 0, 0 
 
     # For image-level tracking:
     img_tp, img_fp, img_fn, img_tn = 0, 0, 0, 0
@@ -75,34 +75,10 @@ def evaluate_predictions(pred_folder, gt_folder, conf_th=0.1, cat=None):
         if gt_boxes:
             obj_fn += len(gt_boxes) - np.sum(gt_matches)
 
-
         # Check if ground truth has any smoke boxes in this image
         # True if GT file contains smoke annotations, False if empty/no smoke
         has_smoke_gt = len(gt_boxes) > 0
         # Check if prediction file exists and has any predictions
-        has_smoke_pred = os.path.isfile(pred_file) and os.path.getsize(pred_file) > 0
-
-        # True Negative: no smoke in GT and no valid predictions above threshold
-        if not has_smoke_gt and not has_smoke_pred:
-            # Double-check no predictions are above threshold
-            has_valid_pred_above_thresh = False
-            if os.path.isfile(pred_file) and os.path.getsize(pred_file) > 0:
-                with open(pred_file, "r") as f:
-                    temp_boxes = [line.strip().split(" ") for line in f.readlines()]
-                for box in temp_boxes:
-                    try:
-                        conf = float(box[5])
-                        if conf >= conf_th:
-                            has_valid_pred_above_thresh = True
-                            break
-                    except:
-                        continue
-            
-            if not has_valid_pred_above_thresh:
-                obj_tn += 1
-
-        # Image-level classification (one result per image)
-        has_smoke_gt = len(gt_boxes) > 0
         has_smoke_pred = os.path.isfile(pred_file) and os.path.getsize(pred_file) > 0
         
         # Check if any prediction above threshold overlaps with GT
@@ -137,10 +113,6 @@ def evaluate_predictions(pred_folder, gt_folder, conf_th=0.1, cat=None):
             else:
                 img_tn += 1
 
-
-    # Calculate spatial accuracy = (TP + TN) / Total images
-    obj_spatial_accuracy = (obj_tp + obj_tn) / len(all_filenames) if len(all_filenames) > 0 else 0
-
     # Calculate OBJECT-LEVEL metrics 
     obj_precision = obj_tp / (obj_tp + obj_fp) if (obj_tp + obj_fp) > 0 else 0
     obj_recall = obj_tp / (obj_tp + obj_fn) if (obj_tp + obj_fn) > 0 else 0
@@ -160,11 +132,9 @@ def evaluate_predictions(pred_folder, gt_folder, conf_th=0.1, cat=None):
             "obj_precision": obj_precision, 
             "obj_recall": obj_recall, 
             "obj_f1_score": obj_f1_score, 
-            "obj_spatial_accuracy": obj_spatial_accuracy, 
             "obj_tp": obj_tp, 
             "obj_fp": obj_fp, 
             "obj_fn": obj_fn, 
-            "obj_tn": obj_tn,
 
             # Image-level metrics
             "img_precision": img_precision,
@@ -369,7 +339,6 @@ if __name__ == "__main__":
             "best_accuracy": float(best_accuracy),
             "object_level_confusion_matrix": {
                 "true_positives": int(final_results["obj_tp"]),
-                "true_negatives": int(final_results["obj_tn"]),
                 "false_positives": int(final_results["obj_fp"]),
                 "false_negatives": int(final_results["obj_fn"])
             },
@@ -383,7 +352,6 @@ if __name__ == "__main__":
                 "f1_score": float(final_results["obj_f1_score"]),
                 "precision": float(final_results["obj_precision"]),
                 "recall": float(final_results["obj_recall"]),
-                "accuracy": float(final_results["obj_spatial_accuracy"])
             },
             "image_level_metrics": {
                 "f1_score": float(final_results["img_f1_score"]),
@@ -402,7 +370,7 @@ if __name__ == "__main__":
         print(f"\n🎉 EVALUATION COMPLETE!")
         print(f"🏆 Best F1: {best_f1:.3f} at confidence {best_conf:.3f}")
         print(f"📊 Precision: {best_precision:.3f}, Recall: {best_recall:.3f}, Accuracy: {best_accuracy:.3f}")
-        print(f"🔢 Object Level Confusion Matrix - TP: {final_results['obj_tp']}, TN: {final_results['obj_tn']}, FP: {final_results['obj_fp']}, FN: {final_results['obj_fn']}")
+        print(f"🔢 Object Level Confusion Matrix - TP: {final_results['obj_tp']}, FP: {final_results['obj_fp']}, FN: {final_results['obj_fn']}")
         print(f"🔢 Image Level Confusion Matrix - TP: {final_results['img_tp']}, TN: {final_results['img_tn']}, FP: {final_results['img_fp']}, FN: {final_results['img_fn']}")
         print(f"📁 Results saved to: {EVAL_DIR}/")
         print(f"📈 Plot saved to: {EVAL_DIR}/metrics.png")
