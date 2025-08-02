@@ -74,7 +74,7 @@ def load_yolo_annotations(label_path: str) -> List[Tuple[int, float, float, floa
                     annotations.append((class_id, x_center, y_center, width, height, confidence))
     return annotations
 
-def evaluate_image_predictions(gt_boxes, pred_boxes, conf_th=0.1, iou_th=0.1):
+def evaluate_image_predictions(gt_boxes, pred_boxes, conf_th=0.1, iou_th=0.01):
     """
     Evaluate predictions for a single image
     Returns object-level and image-level classifications
@@ -183,7 +183,7 @@ def draw_predictions_with_classification(image_path: str, gt_path: str, pred_pat
                 
                 # Draw FN marker
                 cv2.circle(output_image, (x1-10, y1-10), 8, colors['FN'], -1)
-                cv2.putText(output_image, 'FN', (x1-25, y1-5), cv2.FONT_HERSHEY_SIMPLEX, 0.4, colors['FN'], 1)
+                cv2.putText(output_image, 'FN', (x1-35, y1-15), cv2.FONT_HERSHEY_SIMPLEX, 0.4, colors['FN'], 1)
     
     # Add image classification and stats
     stats_text = f"Image: {img_classification} | GT: {len(gt_boxes)} | Pred: {len([p for p in pred_boxes if p[5] >= conf_th])}"
@@ -273,13 +273,14 @@ def generate_prediction_visualizations(experiment_name: str,
         gt_file = os.path.join(split_gt_dir, f"{image_name}.txt")
         pred_file = os.path.join(pred_labels_dir, f"{image_name}.txt")
         
-        # Skip if no prediction file
+        # Handle missing prediction files as "no predictions"
         if not os.path.exists(pred_file):
-            continue
+            pred_boxes = []  # Empty predictions = model detected nothing
+        else:
+            pred_boxes = load_yolo_annotations(pred_file)
         
         # Load annotations
         gt_boxes = load_yolo_annotations(gt_file)
-        pred_boxes = load_yolo_annotations(pred_file)
         
         # Evaluate predictions
         obj_classifications, img_classification = evaluate_image_predictions(
