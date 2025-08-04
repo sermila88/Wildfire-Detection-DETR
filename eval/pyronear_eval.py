@@ -6,7 +6,7 @@ import matplotlib.pyplot as plt
 import pandas as pd
 import seaborn as sns
 
-EXPERIMENT_NAME = "yolo_baseline_v1"  # <-- change this per experiment
+EXPERIMENT_NAME = "yolo_baseline_v1_IoU=0.1"  # <-- change this per experiment
 EVAL_DIR = f"outputs/{EXPERIMENT_NAME}/eval_results"
 PLOT_DIR = f"outputs/{EXPERIMENT_NAME}/plots"
 os.makedirs(EVAL_DIR, exist_ok=True)
@@ -21,8 +21,9 @@ def evaluate_predictions(pred_folder, gt_folder, conf_th=0.1, iou_th=0.1, cat=No
 
     # Get all test images (including non-annotated images)
     test_images_dir = "/vol/bitbucket/si324/rf-detr-wildfire/data/pyro25img/images/test"
+    # Get all image files
     all_image_files = [f for f in os.listdir(test_images_dir) 
-                       if f.lower().endswith(('.jpg', '.jpeg', '.png'))]
+                   if f.lower().endswith(('.jpg', '.jpeg', '.png'))]
     all_filenames = [os.path.splitext(f)[0] for f in all_image_files]
     
     print(f"Processing {len(all_filenames)} total test images")
@@ -338,7 +339,7 @@ def img_find_best_conf_threshold_and_plot(
 def obj_find_best_conf_threshold_and_plot(
     pred_folder, gt_folder, conf_thres_range, plot=True
 ):
-    obj_f1_scores, obj_precisions, obj_recalls = [], [], [], []
+    obj_f1_scores, obj_precisions, obj_recalls = [], [], []
 
     for conf_thres in conf_thres_range:
         results = evaluate_predictions(pred_folder, gt_folder, conf_thres, iou_th=0.1)
@@ -397,7 +398,7 @@ def obj_find_best_conf_threshold_and_plot(
             best_f1_score,
             f"Best F1: {best_f1_score:.2f}\n"
             f"Precision: {best_precision:.2f}\n"
-            f"Recall: {best_recall:.2f}\n \n"
+            f"Recall: {best_recall:.2f}\n \n",
             fontsize=9,
             verticalalignment="bottom",
         )
@@ -445,6 +446,14 @@ if __name__ == "__main__":
     # Run evaluation 
     conf_range = np.arange(0.1, 0.9, 0.05)
     print(f"📊 Testing {len(conf_range)} confidence thresholds")
+
+    test_images_dir = "/vol/bitbucket/si324/rf-detr-wildfire/data/pyro25img/images/test"
+    # Get all image files
+    all_image_files = [f for f in os.listdir(test_images_dir)
+                    if f.lower().endswith(('.jpg', '.jpeg', '.png'))]
+    all_filenames = [os.path.splitext(f)[0] for f in all_image_files]
+
+    print(f"📂 Processing {len(all_filenames)} total test images")
     
     try:
         # Get best thresholds for both levels
@@ -466,16 +475,6 @@ if __name__ == "__main__":
             "iou_threshold": iou_th,
             "image_level_best_threshold": float(img_best_conf),
             "object_level_best_threshold": float(obj_best_conf),
-
-            # Best results
-            "image_level_best_f1_score": float(img_best_f1),
-            "image_level_best_precision": float(img_best_precision),
-            "image_level_best_recall": float(img_best_recall),
-            "image_level_best_accuracy": float(img_best_accuracy),
-            
-            "object_level_best_f1_score": float(obj_best_f1),
-            "object_level_best_precision": float(obj_best_precision),
-            "object_level_best_recall": float(obj_best_recall),
 
             # IMAGE-LEVEL results 
             "image_level_confusion_matrix": {

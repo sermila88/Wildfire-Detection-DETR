@@ -31,9 +31,11 @@ GT_LABELS_DIR="${PROJECT_ROOT}/data/pyro25img/labels"
 PRED_LABELS_DIR="${PROJECT_ROOT}/models/yolo_baseline_v1/test_preds/train/labels"
 
 # Configuration
-EXPERIMENT_NAME="yolo_baseline_v1"
+EXPERIMENT_NAME="yolo_baseline_v1_IoU=0.1"
 SPLIT="test"
-CONF_THRESHOLD="0.1"  # Same as your evaluation script
+IMG_CONF_THRESHOLD="0.1"
+OBJ_CONF_THRESHOLD="0.2"
+IOU_THRESHOLD="0.1"
 
 echo "🔧 Configuration:"
 echo "   📁 Project Root: ${PROJECT_ROOT}"
@@ -42,7 +44,9 @@ echo "   🏷️  GT Labels Dir: ${GT_LABELS_DIR}"
 echo "   🔮 Pred Labels Dir: ${PRED_LABELS_DIR}"
 echo "   🎯 Experiment: ${EXPERIMENT_NAME}"
 echo "   📊 Split: ${SPLIT}"
-echo "   🎚️  Confidence Threshold: ${CONF_THRESHOLD}"
+echo "   🎚️  Image-Level Confidence Threshold: ${IMG_CONF_THRESHOLD}"
+echo "   🎚️  Object-Level Confidence Threshold: ${OBJ_CONF_THRESHOLD}"
+echo "   🎯 IoU Threshold: ${IOU_THRESHOLD}"
 
 # Check if prediction directory exists
 if [ ! -d "${PRED_LABELS_DIR}" ]; then
@@ -60,7 +64,9 @@ python ${PROJECT_ROOT}/utils/YOLO/yolo_predict_bounding_boxes.py \
     --gt_labels_dir "${GT_LABELS_DIR}" \
     --pred_labels_dir "${PRED_LABELS_DIR}" \
     --split "${SPLIT}" \
-    --conf_th "${CONF_THRESHOLD}"
+    --img_conf_th "${IMG_CONF_THRESHOLD}" \
+    --obj_conf_th "${OBJ_CONF_THRESHOLD}" \
+    --iou_th "${IOU_THRESHOLD}"
 
 exit_code=$?
 
@@ -80,7 +86,6 @@ if [ $exit_code -eq 0 ]; then
     echo ""
     echo "   📈 Statistics: bounding_boxes/${EXPERIMENT_NAME}/yolo_predicted_bb_breakdown/test_prediction_breakdown_stats.json"
     echo ""
-    echo "🔍 Visual Inspection Guide:"
     echo "   - Green boxes = True Positive detections (correct)"
     echo "   - Red boxes = False Positive detections (wrong)"
     echo "   - Blue circles = False Negative ground truth (missed)"
