@@ -385,11 +385,14 @@ def generate_prediction_visualizations(experiment_name: str,
         # Generate IMAGE-LEVEL visualization
         img_output_path = os.path.join(img_level_dirs[img_classification], f"{filename}_img_th{img_conf_th}.jpg")
         
+        # Generate IMAGE-LEVEL object classifications using IMAGE-LEVEL threshold
+        img_level_obj_classifications = evaluate_object_classifications(gt_boxes, pred_boxes, img_conf_th, iou_th)
+        
         img_result = draw_predictions_with_classification(
             image_path, gt_file, pred_file, img_output_path,
-            img_conf_th, obj_classifications, img_classification, 'image'
+            img_conf_th, img_level_obj_classifications, img_classification, 'image'
         )
-        
+
         if img_result:
             stats['detailed_results'].append(img_result)
             stats['processed_images'] += 1
