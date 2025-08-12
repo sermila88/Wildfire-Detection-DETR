@@ -419,7 +419,7 @@ def generate_prediction_visualizations(experiment_name: str,
                     if obj_class == 'FN':
                         # Show all object classifications to see FP predictions that interfered
                         visualization_data = obj_classifications
-                        title = f"FN GT_{gt_idx} - All Predictions Shown"
+                        title = f"FN GT_{gt_idx}"
                     else:
                         # Focus on single object for TP/FP
                         visualization_data = [(obj_class, pred_idx, gt_idx, conf, iou)]

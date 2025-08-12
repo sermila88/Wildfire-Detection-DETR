@@ -84,7 +84,9 @@ def load_model():
         exit(1)
     
     print(f"✅ Loading RF-DETR from: {checkpoint_path}")
-    return RFDETRBase(pretrain_weights=checkpoint_path)
+    model = RFDETRBase(pretrain_weights=checkpoint_path)
+    model = model.optimize_for_inference()  
+    return model
 
 # ============================================================================
 # DATASET LOADING

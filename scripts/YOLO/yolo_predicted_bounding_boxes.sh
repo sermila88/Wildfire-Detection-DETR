@@ -31,11 +31,11 @@ GT_LABELS_DIR="${PROJECT_ROOT}/data/pyro25img/labels"
 PRED_LABELS_DIR="${PROJECT_ROOT}/models/yolo_baseline_v1/test_preds/train/labels"
 
 # Configuration
-EXPERIMENT_NAME="yolo_baseline_v1_IoU=0.1"
+EXPERIMENT_NAME="yolo_baseline_v1_IoU=0.01"
 SPLIT="test"
 IMG_CONF_THRESHOLD="0.1"
 OBJ_CONF_THRESHOLD="0.2"
-IOU_THRESHOLD="0.1"
+IOU_THRESHOLD="0.01"
 
 echo "🔧 Configuration:"
 echo "   📁 Project Root: ${PROJECT_ROOT}"
