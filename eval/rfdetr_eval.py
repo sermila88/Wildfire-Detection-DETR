@@ -7,13 +7,13 @@ import os
 import json
 import numpy as np
 import matplotlib.pyplot as plt
-from pathlib import Path
 from tqdm import tqdm
 from PIL import Image
 import torch
 from torchvision.ops import box_iou
 import supervision as sv
 from rfdetr import RFDETRBase
+import seaborn as sns
 
 # ============================================================================
 # CONFIGURATION
@@ -34,6 +34,7 @@ PLOTS_DIR = f"{EXPERIMENT_DIR}/plots"
 # Evaluation parameters (PyroNear methodology)
 CONFIDENCE_THRESHOLDS = np.arange(0.1, 0.9, 0.05)
 SPATIAL_IOU_THRESHOLD = 0.1  # PyroNear baseline
+YOLO_BASELINE_IOU = 0.1
 
 # Create output directories
 os.makedirs(EVAL_RESULTS_DIR, exist_ok=True)
@@ -45,32 +46,56 @@ print(f"📁 Experiment: {EXPERIMENT_NAME}")
 # ============================================================================
 # LOAD YOLO BASELINE FOR COMPARISON
 # ============================================================================
-def load_yolo_baseline():
-    """Load YOLO baseline results for comparison"""
-    yolo_results_path = f"{PROJECT_ROOT}/outputs/yolo_baseline_v1/eval_results/summary_results.json"
-    
+def _format_iou_tag(iou: float) -> str:
+    s = f"{iou:.2f}"                  # "0.10" or "0.01"
+    return s.rstrip("0").rstrip(".")  # -> "0.1" or "0.01"
+
+def load_yolo_baseline(iou_for_baseline: float = YOLO_BASELINE_IOU):
+    """Load YOLO baseline (image + object level) from saved summary JSON."""
+    tag = _format_iou_tag(iou_for_baseline)
+    path = f"{PROJECT_ROOT}/outputs/yolo_baseline_v1_IoU={tag}/eval_results/summary_results.json"
     try:
-        with open(yolo_results_path, 'r') as f:
-            yolo_data = json.load(f)
-        
+        with open(path, "r") as f:
+            data = json.load(f)
+
         baseline = {
-            'f1_score': yolo_data['best_f1_score'],
-            'precision': yolo_data['best_precision'],
-            'recall': yolo_data['best_recall'],
-            'accuracy': yolo_data['best_accuracy']
+            "experiment_name": data.get("experiment_name"),
+            "iou_threshold": data.get("iou_threshold"),
+            "image": {
+                "best_threshold": data["image_level_best_threshold"],
+                "metrics": data["image_level_metrics"],
+                "confusion_matrix": data["image_level_confusion_matrix"],
+            },
+            "object": {
+                "best_threshold": data["object_level_best_threshold"],
+                "metrics": data["object_level_metrics"],
+                "confusion_matrix": data["object_level_confusion_matrix"],
+            },
         }
-        
-        print(f"✅ Loaded YOLO baseline: F1={baseline['f1_score']:.4f}")
+        print(
+            f"✅ Loaded YOLO baseline @IoU={baseline['iou_threshold']}: "
+            f"image-F1={baseline['image']['metrics']['f1_score']:.3f} "
+            f"(thr={baseline['image']['best_threshold']})"
+        )
         return baseline
-        
+
     except FileNotFoundError:
-        print(f"⚠️  YOLO baseline file not found, using fallback values")
+        print(f"⚠️  YOLO baseline file not found at:\n    {path}")
         return {
-            'f1_score': 0.688,
-            'precision': 0.743,
-            'recall': 0.641,
-            'accuracy': 0.587
+            "experiment_name": "yolo_baseline_fallback",
+            "iou_threshold": iou_for_baseline,
+            "image": {
+                "best_threshold": 0.1,
+                "metrics": {"f1_score": 0.0, "precision": 0.0, "recall": 0.0, "accuracy": 0.0},
+                "confusion_matrix": {"true_positives": 0, "true_negatives": 0, "false_positives": 0, "false_negatives": 0},
+            },
+            "object": {
+                "best_threshold": 0.2,
+                "metrics": {"f1_score": 0.0, "precision": 0.0, "recall": 0.0},
+                "confusion_matrix": {"true_positives": 0, "false_positives": 0, "false_negatives": 0},
+            },
         }
+
 
 # ============================================================================
 # MODEL INITIALIZATION
@@ -85,7 +110,8 @@ def load_model():
     
     print(f"✅ Loading RF-DETR from: {checkpoint_path}")
     model = RFDETRBase(pretrain_weights=checkpoint_path)
-    model = model.optimize_for_inference()  
+    model = model.optimize_for_inference()
+    model.eval()  
     return model
 
 # ============================================================================
@@ -119,15 +145,14 @@ def load_dataset():
     
     # Add annotated images
     for path, image, annotations in coco_ds:
-        combined_dataset.append((path, image, annotations))
+        combined_dataset.append((path, None, annotations))
     
     # Add non-annotated images with empty annotations
     for img_name in non_coco_images:
         img_path = os.path.join(DATASET_PATH, img_name)
         if os.path.exists(img_path):
-            image = Image.open(img_path)
             empty_annotations = sv.Detections.empty()
-            combined_dataset.append((img_path, image, empty_annotations))
+            combined_dataset.append((img_path, None, empty_annotations))
     
     print(f"📊 Combined dataset: {len(combined_dataset)} images")
     return combined_dataset
@@ -152,233 +177,278 @@ def has_spatial_overlap(predictions, ground_truth):
     ious = box_iou(pred_boxes, gt_boxes)
     return (ious > SPATIAL_IOU_THRESHOLD).any().item()
 
-def evaluate_at_confidence(model, dataset, confidence_threshold):
+# --- REPLACE evaluate_at_confidence AND evaluate_model WITH THIS ---
+
+def _object_tp_fp_fn_for_image(preds, annotations, iou_th=SPATIAL_IOU_THRESHOLD):
+    """Compute object-level TP/FP/FN for a single image (YOLO-style matching)."""
+    gt = np.array(annotations.xyxy)
+    pr = np.array(preds.xyxy)
+    tp = fp = fn = 0
+
+    if gt.size == 0 and pr.size == 0:
+        return 0, 0, 0
+
+    matched = np.zeros(len(gt), dtype=bool) if len(gt) else np.array([], dtype=bool)
+
+    for pb in pr:
+        if len(gt):
+            ious = box_iou(
+                torch.tensor(pb).unsqueeze(0).float(),
+                torch.tensor(gt).float()
+            ).squeeze(0)
+            if ious.numel() > 0:
+                m, idx = torch.max(ious, dim=0)
+                idx = int(idx.item())
+                if m.item() > iou_th and not matched[idx]:
+                    tp += 1
+                    matched[idx] = True
+                else:
+                    fp += 1
+            else:
+                fp += 1
+        else:
+            fp += 1
+
+    if len(gt):
+        fn += int((~matched).sum())
+
+    return tp, fp, fn
+
+
+def _counts_at_conf(model, dataset, conf):
     """
-    Evaluate model at a single confidence threshold
-    Returns TP, FP, FN, TN counts 
+    One sweep over the dataset at a given confidence:
+      - returns image-level TP/FP/FN/TN
+      - returns object-level TP/FP/FN
     """
-    tp = fp = fn = tn = 0
-    
-    for path, image, annotations in dataset:
-        # Get model predictions
-        predictions = model.predict(image, threshold=confidence_threshold)
-        
-        # Check for smoke presence
+    img_tp = img_fp = img_fn = img_tn = 0
+    obj_tp = obj_fp = obj_fn = 0
+
+    for path, _, annotations in dataset:
+        # ensure PIL RGB; doesn't alter colors, just guarantees channel order
+        with Image.open(path) as _img:
+            img = _img.convert("RGB")
+            preds = model.predict(img, threshold=conf)
+
+        # ---- image-level (PyroNear) ----
         has_smoke_gt = len(annotations.xyxy) > 0
-        has_smoke_pred = len(predictions.xyxy) > 0
+        has_smoke_pred = len(preds.xyxy) > 0
+        spatial_match = False
+        if has_smoke_gt and has_smoke_pred:
+            spatial_match = has_spatial_overlap(preds, annotations)
 
         if has_smoke_gt:
-            # Ground truth has smoke - check for spatial overlap
-            spatial_match = has_spatial_overlap(predictions, annotations) if has_smoke_pred else False
-            
-            if spatial_match:
-                tp += 1  # True Positive: Correct detection with spatial overlap
-            else:
-                fn += 1  # False Negative: Missed detection or no prediction
+            if spatial_match: img_tp += 1
+            else:             img_fn += 1
         else:
-            # Ground truth has no smoke (empty scene)
-            if has_smoke_pred:
-                fp += 1  # False Positive: False alarm on empty scene
-            else:
-                tn += 1  # True Negative: Correctly identified empty scene
+            if has_smoke_pred: img_fp += 1
+            else:              img_tn += 1
 
-    total_images = len(dataset)
-    return tp, fp, fn, tn, total_images
+        # ---- object-level (YOLO-style) ----
+        tpo, fpo, fno = _object_tp_fp_fn_for_image(preds, annotations, SPATIAL_IOU_THRESHOLD)
+        obj_tp += tpo; obj_fp += fpo; obj_fn += fno
 
-def calculate_metrics(tp, fp, fn, tn, total_images):
-    """Calculate evaluation metrics"""
-    precision = tp / (tp + fp) if (tp + fp) > 0 else 0.0
-    recall = tp / (tp + fn) if (tp + fn) > 0 else 0.0
-    f1_score = 2 * (precision * recall) / (precision + recall) if (precision + recall) > 0 else 0.0
-    accuracy = (tp + tn) / total_images if total_images > 0 else 0.0
-    
-    return precision, recall, f1_score, accuracy
+    return (img_tp, img_fp, img_fn, img_tn), (obj_tp, obj_fp, obj_fn)
 
-def evaluate_model(model, dataset):
+
+def evaluate_model_both_levels(model, dataset):
     """
-    Evaluate RF-DETR across multiple confidence thresholds
-    Uses PyroNear methodology for direct comparison
+    Run image-level and object-level eval in parallel across thresholds.
+    Returns (img_results, obj_results) lists with metrics per threshold.
     """
-    print(f"\n🔥 Running evaluation across {len(CONFIDENCE_THRESHOLDS)} confidence thresholds...")
-    
-    results = []
-    
-    for conf_threshold in tqdm(CONFIDENCE_THRESHOLDS, desc="Evaluating"):
-        # Evaluate at this confidence threshold
-        tp, fp, fn, tn, total_images = evaluate_at_confidence(model, dataset, conf_threshold)
-        
-        # Calculate metrics
-        precision, recall, f1_score, accuracy = calculate_metrics(tp, fp, fn, tn, total_images)
-        
-        # Store results
-        result = {
-            'confidence_threshold': float(conf_threshold),
-            'precision': precision,
-            'recall': recall,
-            'f1_score': f1_score,
-            'accuracy': accuracy,
-            'tp': tp,
-            'fp': fp,
-            'fn': fn,
-            'tn': tn
-        }
-        results.append(result)
-        
-        print(f"Conf {conf_threshold:.2f}: P={precision:.3f}, R={recall:.3f}, F1={f1_score:.3f}, Acc={accuracy:.3f}")
-    
-    return results
+    print(f"\n🔥 Running evaluation across {len(CONFIDENCE_THRESHOLDS)} thresholds (image+object together)...")
+    img_results, obj_results = [], []
+
+    for conf in tqdm(CONFIDENCE_THRESHOLDS, desc="Evaluating"):
+        (img_tp, img_fp, img_fn, img_tn), (obj_tp, obj_fp, obj_fn) = _counts_at_conf(model, dataset, conf)
+        total_images = len(dataset)
+
+        # image-level metrics
+        img_prec = img_tp / (img_tp + img_fp) if (img_tp + img_fp) > 0 else 0.0
+        img_rec  = img_tp / (img_tp + img_fn) if (img_tp + img_fn) > 0 else 0.0
+        img_f1   = 2*img_prec*img_rec / (img_prec + img_rec) if (img_prec + img_rec) > 0 else 0.0
+        img_acc  = (img_tp + img_tn) / total_images if total_images > 0 else 0.0
+
+        img_results.append({
+            "confidence_threshold": float(conf),
+            "precision": img_prec, "recall": img_rec, "f1_score": img_f1, "accuracy": img_acc,
+            "tp": img_tp, "fp": img_fp, "fn": img_fn, "tn": img_tn
+        })
+
+        # object-level metrics
+        obj_prec = obj_tp / (obj_tp + obj_fp) if (obj_tp + obj_fp) > 0 else 0.0
+        obj_rec  = obj_tp / (obj_tp + obj_fn) if (obj_tp + obj_fn) > 0 else 0.0
+        obj_f1   = 2*obj_prec*obj_rec / (obj_prec + obj_rec) if (obj_prec + obj_rec) > 0 else 0.0
+
+        obj_results.append({
+            "confidence_threshold": float(conf),
+            "precision": obj_prec, "recall": obj_rec, "f1_score": obj_f1,
+            "tp": obj_tp, "fp": obj_fp, "fn": obj_fn
+        })
+
+        print(f"Conf {conf:.2f}  |  IMG  P={img_prec:.3f} R={img_rec:.3f} F1={img_f1:.3f} Acc={img_acc:.3f}  ||  "
+              f"OBJ  P={obj_prec:.3f} R={obj_rec:.3f} F1={obj_f1:.3f}")
+
+    return img_results, obj_results
+
+
 
 # ============================================================================
 # VISUALIZATION
 # ============================================================================
-def create_evaluation_plot(results):
-    """Create evaluation metrics plot"""
-    conf_vals = [r['confidence_threshold'] for r in results]
-    f1_scores = [r['f1_score'] for r in results]
-    precisions = [r['precision'] for r in results]
-    recalls = [r['recall'] for r in results]
-    accuracies = [r['accuracy'] for r in results]
-    
-    # Find best F1 score
-    best_idx = np.argmax(f1_scores)
-    best_conf = conf_vals[best_idx]
-    best_f1 = f1_scores[best_idx]
-    
-    # Create plot
-    plt.figure(figsize=(12, 8))
-    plt.plot(conf_vals, f1_scores, 'b-o', label='F1 Score', linewidth=2)
-    plt.plot(conf_vals, precisions, 'g--', label='Precision')
-    plt.plot(conf_vals, recalls, 'r-.', label='Recall')
-    plt.plot(conf_vals, accuracies, 'm:', label='Spatial Accuracy')
-    
-    # Highlight best point
-    plt.scatter(best_conf, best_f1, color='blue', s=100, edgecolor='black', zorder=5)
-    plt.text(best_conf, best_f1, f'Best F1: {best_f1:.3f}\n@conf={best_conf:.2f}', 
-             fontsize=10, ha='center', va='bottom')
-    
-    plt.title('RF-DETR Performance vs Confidence Threshold', fontsize=14)
-    plt.xlabel('Confidence Threshold')
-    plt.ylabel('Metric Value')
-    plt.legend()
-    plt.grid(True, alpha=0.3)
-    plt.tight_layout()
-    
-    # Save plot
-    plot_path = f"{PLOTS_DIR}/evaluation_metrics.png"
-    plt.savefig(plot_path, dpi=150, bbox_inches='tight')
-    plt.close()
-    
-    print(f"📈 Plot saved: {plot_path}")
-    return plot_path
+def create_image_metrics_plot(img_results):
+    conf = [r['confidence_threshold'] for r in img_results]
+    f1   = [r['f1_score'] for r in img_results]
+    prec = [r['precision'] for r in img_results]
+    rec  = [r['recall'] for r in img_results]
+    acc  = [r['accuracy'] for r in img_results]
 
-def create_confusion_matrix(model, dataset, best_confidence):
-    """Create confusion matrix visualization"""
-    predictions_list = []
-    targets_list = []
-    
-    for path, image, annotations in tqdm(dataset, desc="Generating confusion matrix"):
-        predictions = model.predict(image, threshold=best_confidence)
-        
-        # Normalize class IDs to 0 (single smoke class)
-        if len(predictions.class_id) > 0:
-            predictions.class_id = np.zeros(len(predictions.class_id), dtype=int)
-        if len(annotations.class_id) > 0:
-            annotations.class_id = np.zeros(len(annotations.class_id), dtype=int)
-        
-        predictions_list.append(predictions)
-        targets_list.append(annotations)
-    
-    # Create and save confusion matrix
-    conf_matrix = sv.ConfusionMatrix.from_detections(
-        predictions=predictions_list,
-        targets=targets_list,
-        classes=["smoke"]
-    )
-    
-    conf_matrix.plot()
-    matrix_path = f"{PLOTS_DIR}/confusion_matrix.png"
-    plt.savefig(matrix_path, dpi=150, bbox_inches='tight')
-    plt.close()
-    
-    print(f"🎯 Confusion matrix saved: {matrix_path}")
-    return matrix_path
+    best_idx = int(np.argmax(f1))
+    best_conf, best_f1 = conf[best_idx], f1[best_idx]
+
+    plt.figure(figsize=(10, 6))
+    plt.plot(conf, f1,  label="F1 Score", marker="o")
+    plt.plot(conf, prec, label="Precision", linestyle="--")
+    plt.plot(conf, rec,  label="Recall", linestyle="-.")
+    plt.plot(conf, acc,  label="Accuracy", linestyle=":")
+    plt.scatter(best_conf, best_f1, s=150, marker='*', edgecolor="black", zorder=5)
+    plt.scatter(best_conf, prec[best_idx], s=80, edgecolor="k", zorder=5)
+    plt.scatter(best_conf, rec[best_idx],  s=80, edgecolor="k", zorder=5)
+    if 'accuracy' in img_results[0]:  # only for image plot
+        plt.scatter(best_conf, acc[best_idx],  s=80, edgecolor="k", zorder=5)
+    plt.title(f"{EXPERIMENT_NAME} – Image-Level Metrics vs. Confidence Threshold")
+    plt.xlabel("Confidence Threshold"); plt.ylabel("Metric Value"); plt.legend(); plt.grid(True)
+    out = f"{PLOTS_DIR}/image_metrics.png"
+    plt.savefig(out, dpi=150, bbox_inches="tight"); plt.close()
+    return out, img_results[best_idx]
+
+
+def create_object_metrics_plot(obj_results):
+    conf = [r['confidence_threshold'] for r in obj_results]
+    f1   = [r['f1_score'] for r in obj_results]
+    prec = [r['precision'] for r in obj_results]
+    rec  = [r['recall'] for r in obj_results]
+
+    best_idx = int(np.argmax(f1))
+    best_conf, best_f1 = conf[best_idx], f1[best_idx]
+
+    plt.figure(figsize=(10, 6))
+    plt.plot(conf, f1,  label="F1 Score", marker="o")
+    plt.plot(conf, prec, label="Precision", linestyle="--")
+    plt.plot(conf, rec,  label="Recall", linestyle="-.")
+    plt.scatter(best_conf, best_f1, s=150, marker='*', edgecolor="black", zorder=5)
+    plt.scatter(best_conf, prec[best_idx], s=80, edgecolor="k", zorder=5)
+    plt.scatter(best_conf, rec[best_idx],  s=80, edgecolor="k", zorder=5)
+    plt.title(f"{EXPERIMENT_NAME} – Object-Level Metrics vs. Confidence Threshold")
+    plt.xlabel("Confidence Threshold"); plt.ylabel("Metric Value"); plt.legend(); plt.grid(True)
+    out = f"{PLOTS_DIR}/object_metrics.png"
+    plt.savefig(out, dpi=150, bbox_inches="tight"); plt.close()
+    return out, obj_results[best_idx]
+
+def create_image_confusion_matrix_from_row(img_best_row):
+    cm = np.array([[img_best_row["tp"], img_best_row["fn"]],
+                   [img_best_row["fp"], img_best_row["tn"]]])
+    plt.figure(figsize=(6, 5))
+    sns.heatmap(cm, annot=True, fmt="d", cmap="Blues",
+                xticklabels=["Pred Fire", "Pred No Fire"],
+                yticklabels=["GT Fire", "GT No Fire"])
+    plt.title(f"{EXPERIMENT_NAME} – Image-Level Confusion Matrix (IoU={SPATIAL_IOU_THRESHOLD})")
+    out = f"{PLOTS_DIR}/image_conf_matrix.png"
+    plt.savefig(out, dpi=150, bbox_inches="tight"); plt.close()
+    return out
+
+
+def create_object_confusion_matrix_from_row(obj_best_row):
+    cm = np.array([[obj_best_row["tp"], obj_best_row["fn"]],
+                   [obj_best_row["fp"], "N/A"]], dtype=object)
+    plt.figure(figsize=(6, 5))
+    sns.heatmap(cm, annot=True, fmt="", cmap="Oranges",
+                xticklabels=["Pred Fire", "Pred No Fire"],
+                yticklabels=["GT Fire", "GT No Fire"])
+    plt.title(f"{EXPERIMENT_NAME} – Object-Level Confusion Matrix (TN = N/A, IoU={SPATIAL_IOU_THRESHOLD})")
+    out = f"{PLOTS_DIR}/object_conf_matrix.png"
+    plt.savefig(out, dpi=150, bbox_inches="tight"); plt.close()
+    return out
 
 # ============================================================================
 # RESULTS SAVING
 # ============================================================================
-def save_results(results, yolo_baseline):
-    """Save comprehensive evaluation results"""
-    # Find best result
-    best_result = max(results, key=lambda x: x['f1_score'])
-    
-    # Calculate improvement over YOLO baseline
-    improvement = best_result['f1_score'] - yolo_baseline['f1_score']
-    improvement_percent = (improvement / yolo_baseline['f1_score']) * 100
-    
-    # Compile comprehensive results
+def save_results(img_results, obj_results, yolo_baseline, img_best, obj_best):
+    yolo_img = yolo_baseline["image"]["metrics"]
+    yolo_obj = yolo_baseline["object"]["metrics"]
+
+    # improvements (image-level comparison is the headline; object-level optional)
+    def _pct_increase(new, old):
+        return ((new - old) / old * 100.0) if old > 0 else 0.0
+    imp_img_pct = _pct_increase(img_best['f1_score'], yolo_img['f1_score'])
+    imp_obj_pct = _pct_increase(obj_best['f1_score'], yolo_obj['f1_score'])
+
     evaluation_data = {
         "experiment_info": {
             "experiment_name": EXPERIMENT_NAME,
             "spatial_iou_threshold": SPATIAL_IOU_THRESHOLD,
             "dataset_path": DATASET_PATH
         },
-        "best_results": {
-            "confidence_threshold": best_result['confidence_threshold'],
-            "f1_score": best_result['f1_score'],
-            "precision": best_result['precision'],
-            "recall": best_result['recall'],
-            "accuracy": best_result['accuracy']
+        "image_best_results": {
+            "confidence_threshold": img_best['confidence_threshold'],
+            "f1_score": img_best['f1_score'],
+            "precision": img_best['precision'],
+            "recall": img_best['recall'],
+            "accuracy": img_best['accuracy'],
+            "confusion_matrix": {
+                "true_positives": int(img_best["tp"]),
+                "true_negatives": int(img_best["tn"]),
+                "false_positives": int(img_best["fp"]),
+                "false_negatives": int(img_best["fn"])
+            }
         },
-         "confusion_matrix": {  
-            "true_positives": int(best_result["tp"]),
-            "true_negatives": int(best_result["tn"]),
-            "false_positives": int(best_result["fp"]),
-            "false_negatives": int(best_result["fn"])
+        "object_best_results": {
+            "confidence_threshold": obj_best['confidence_threshold'],
+            "f1_score": obj_best['f1_score'],
+            "precision": obj_best['precision'],
+            "recall": obj_best['recall'],
+            "confusion_matrix": {
+                "true_positives": int(obj_best["tp"]),
+                "false_positives": int(obj_best["fp"]),
+                "false_negatives": int(obj_best["fn"]),
+                "true_negatives": "N/A"
+            }
         },
         "baseline_comparison": {
             "yolo_baseline": yolo_baseline,
-            "rfdetr_results": {
-                "f1_score": best_result['f1_score'],
-                "precision": best_result['precision'],
-                "recall": best_result['recall'],
-                "accuracy": best_result['accuracy']
-            },
-            "improvement": {
-                "f1_absolute": improvement,
-                "f1_relative_percent": improvement_percent
+            "improvements_percent": {
+                "image_f1": imp_img_pct,
+                "object_f1": imp_obj_pct
             }
         },
-        "detailed_results": results
+        "detailed_results": {
+            "image_level": img_results,
+            "object_level": obj_results
+        }
     }
-    
-    # Save JSON results
+
     results_path = f"{EVAL_RESULTS_DIR}/evaluation_results.json"
     with open(results_path, 'w') as f:
         json.dump(evaluation_data, f, indent=2)
-    
-    # Save comparison summary
+
     summary_path = f"{EVAL_RESULTS_DIR}/comparison_summary.txt"
     with open(summary_path, 'w') as f:
-        f.write("RF-DETR vs YOLO Baseline Comparison\n")
-        f.write("=" * 40 + "\n\n")
-        f.write("YOLO Baseline Results:\n")
-        f.write(f"  F1 Score:  {yolo_baseline['f1_score']:.4f}\n")
-        f.write(f"  Precision: {yolo_baseline['precision']:.4f}\n")
-        f.write(f"  Recall:    {yolo_baseline['recall']:.4f}\n")
-        f.write(f"  Accuracy:  {yolo_baseline['accuracy']:.4f}\n\n")
-        f.write("RF-DETR Results:\n")
-        f.write(f"  F1 Score:  {best_result['f1_score']:.4f}\n")
-        f.write(f"  Precision: {best_result['precision']:.4f}\n")
-        f.write(f"  Recall:    {best_result['recall']:.4f}\n")
-        f.write(f"  Accuracy:  {best_result['accuracy']:.4f}\n\n")
-        f.write("Improvement:\n")
-        f.write(f"  F1 Score: {improvement:+.4f} ({improvement_percent:+.1f}%)\n")
-    
-    print(f"💾 Results saved:")
-    print(f"  📄 Detailed: {results_path}")
-    print(f"  📊 Summary: {summary_path}")
-    
-    return best_result, improvement_percent
+        f.write("RF-DETR vs YOLO Baseline (Image & Object Levels)\n")
+        f.write("="*48 + "\n\n")
+        f.write("YOLO Baseline (Image Level):\n")
+        f.write(f"  F1: {yolo_img['f1_score']:.4f}  P: {yolo_img['precision']:.4f}  R: {yolo_img['recall']:.4f}  Acc: {yolo_img['accuracy']:.4f}\n")
+        f.write("YOLO Baseline (Object Level):\n")
+        f.write(f"  F1: {yolo_obj['f1_score']:.4f}  P: {yolo_obj['precision']:.4f}  R: {yolo_obj['recall']:.4f}\n\n")
+        f.write("RF-DETR (Image Level):\n")
+        f.write(f"  F1: {img_best['f1_score']:.4f}  P: {img_best['precision']:.4f}  R: {img_best['recall']:.4f}  Acc: {img_best['accuracy']:.4f}  @conf={img_best['confidence_threshold']:.2f}\n")
+        f.write("RF-DETR (Object Level):\n")
+        f.write(f"  F1: {obj_best['f1_score']:.4f}  P: {obj_best['precision']:.4f}  R: {obj_best['recall']:.4f}  @conf={obj_best['confidence_threshold']:.2f}\n\n")
+        f.write("Improvements vs YOLO:\n")
+        f.write(f"  Image F1: {imp_img_pct:+.1f}%\n")
+        f.write(f"  Object F1: {imp_obj_pct:+.1f}%\n")
+
+    print(f"💾 Results saved:\n  📄 {results_path}\n  📊 {summary_path}")
+    return img_best
 
 # ============================================================================
 # MAIN EXECUTION
@@ -392,27 +462,28 @@ def main():
     model = load_model()
     dataset = load_dataset()
     
-    # Run evaluation
-    results = evaluate_model(model, dataset)
-    
-    # Create visualizations
-    create_evaluation_plot(results)
-    
-    # Find best result for confusion matrix
-    best_result = max(results, key=lambda x: x['f1_score'])
-    create_confusion_matrix(model, dataset, best_result['confidence_threshold'])
-    
-    # Save results
-    best_result, improvement_percent = save_results(results, yolo_baseline)
-    
-    # Print final summary
+    # Run evaluation (both levels together)
+    img_results, obj_results = evaluate_model_both_levels(model, dataset)
+
+    # Plots + get best rows
+    img_plot, img_best = create_image_metrics_plot(img_results)
+    obj_plot, obj_best = create_object_metrics_plot(obj_results)
+
+    # Confusion matrices (from best rows, no extra inference)
+    img_cm_path = create_image_confusion_matrix_from_row(img_best)
+    obj_cm_path = create_object_confusion_matrix_from_row(obj_best)
+
+    # Save results (both levels) & summaries
+    _ = save_results(img_results, obj_results, yolo_baseline, img_best, obj_best)
+
+    # Final summary
     print(f"\n🏆 EVALUATION COMPLETE!")
-    print(f"   RF-DETR F1 Score: {best_result['f1_score']:.4f}")
-    print(f"   YOLO Baseline F1: {yolo_baseline['f1_score']:.4f}")
-    print(f"   Improvement: {improvement_percent:+.1f}%")
-    print(f"   Best Confidence: {best_result['confidence_threshold']:.2f}")
-    print(f"🔢 Confusion Matrix - TP: {best_result['tp']}, TN: {best_result['tn']}, FP: {best_result['fp']}, FN: {best_result['fn']}")
-    print(f"\n✅ All results saved to: {EVAL_RESULTS_DIR}")
+    print(f"   RF-DETR Image F1:  {img_best['f1_score']:.4f} @ conf {img_best['confidence_threshold']:.2f}")
+    print(f"   RF-DETR Object F1: {obj_best['f1_score']:.4f} @ conf {obj_best['confidence_threshold']:.2f}")
+    print(f"   YOLO Baseline Image F1:  {yolo_baseline['image']['metrics']['f1_score']:.4f}")
+    print(f"   YOLO Baseline Object F1: {yolo_baseline['object']['metrics']['f1_score']:.4f}")
+    print(f"   Image CM: {img_cm_path}")
+    print(f"   Object CM: {obj_cm_path}")
 
 if __name__ == "__main__":
     main()
