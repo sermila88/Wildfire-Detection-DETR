@@ -4,8 +4,11 @@
 #SBATCH --mail-type=ALL
 #SBATCH --mail-user=si324
 #SBATCH --job-name=yolo_eval
-#SBATCH --output=outputs/yolo_baseline_v1_IoU=0.1/logs/eval-%j.out
-#SBATCH --error=outputs/yolo_baseline_v1_IoU=0.1/logs/eval-%j.err
+#SBATCH --output=outputs/yolo_baseline_v1_IoU=0.01/logs/eval-%j.out
+#SBATCH --error=outputs/yolo_baseline_v1_IoU=0.01/logs/eval-%j.err
+
+# Ensure logs dir exists
+mkdir -p outputs/yolo_baseline_v1_IoU=0.01/logs
 
 # Activate virtual environment
 export PATH=/vol/bitbucket/${USER}/rf-detr-wildfire/.venv/bin:$PATH
@@ -26,4 +29,4 @@ echo "📅 Started at: $(date)"
 python eval/pyronear_eval.py
 
 echo "✅ Evaluation completed at: $(date)"
-echo "📁 Results saved to: outputs/yolo_baseline_v1_IoU=0.1/eval_results/"
+echo "📁 Results saved to: outputs/yolo_baseline_v1_IoU=0.01/eval_results/"

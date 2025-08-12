@@ -6,13 +6,13 @@ import matplotlib.pyplot as plt
 import pandas as pd
 import seaborn as sns
 
-EXPERIMENT_NAME = "yolo_baseline_v1_IoU=0.1"  # <-- change this per experiment
+EXPERIMENT_NAME = "yolo_baseline_v1_IoU=0.01"  # <-- change this per experiment
 EVAL_DIR = f"outputs/{EXPERIMENT_NAME}/eval_results"
 PLOT_DIR = f"outputs/{EXPERIMENT_NAME}/plots"
 os.makedirs(EVAL_DIR, exist_ok=True)
 os.makedirs(PLOT_DIR, exist_ok=True)
 
-def evaluate_predictions(pred_folder, gt_folder, conf_th=0.1, iou_th=0.1, cat=None):
+def evaluate_predictions(pred_folder, gt_folder, conf_th=0.1, iou_th=0.01, cat=None):
     # For object-level tracking:
     obj_fp, obj_tp, obj_fn = 0, 0, 0 
 
@@ -26,7 +26,6 @@ def evaluate_predictions(pred_folder, gt_folder, conf_th=0.1, iou_th=0.1, cat=No
                    if f.lower().endswith(('.jpg', '.jpeg', '.png'))]
     all_filenames = [os.path.splitext(f)[0] for f in all_image_files]
     
-    print(f"Processing {len(all_filenames)} total test images")
 
     if cat is not None:
         all_filenames = [f for f in all_filenames if cat == f.split("_")[0].lower()]
@@ -158,7 +157,7 @@ def find_best_conf_threshold_img(pred_folder, gt_folder, conf_thres_range, cat=N
     best_accuracy_img = 0
 
     for conf_thres in conf_thres_range:
-        results = evaluate_predictions(pred_folder, gt_folder, conf_th=conf_thres, iou_th=0.1, cat=cat)
+        results = evaluate_predictions(pred_folder, gt_folder, conf_th=conf_thres, iou_th=0.01, cat=cat)
         if results["img_f1_score"] > best_f1_score_img:
             best_conf_thres_img = conf_thres
             best_f1_score_img = results["img_f1_score"]
@@ -176,7 +175,7 @@ def find_best_conf_threshold_obj(pred_folder, gt_folder, conf_thres_range, cat=N
     best_recall_obj = 0
 
     for conf_thres in conf_thres_range:
-        results = evaluate_predictions(pred_folder, gt_folder, conf_th=conf_thres, iou_th=0.1, cat=cat)
+        results = evaluate_predictions(pred_folder, gt_folder, conf_th=conf_thres, iou_th=0.01, cat=cat)
         if results["obj_f1_score"] > best_f1_score_obj:
             best_conf_thres_obj = conf_thres
             best_f1_score_obj = results["obj_f1_score"]
@@ -251,7 +250,7 @@ def img_find_best_conf_threshold_and_plot(
     f1_scores, precisions, recalls, accuracies = [], [], [], []
 
     for conf_thres in conf_thres_range:
-        results = evaluate_predictions(pred_folder, gt_folder, conf_thres, iou_th=0.1)
+        results = evaluate_predictions(pred_folder, gt_folder, conf_thres, iou_th=0.01)
         f1_scores.append(results["img_f1_score"])
         precisions.append(results["img_precision"])
         recalls.append(results["img_recall"])
@@ -298,7 +297,7 @@ def img_find_best_conf_threshold_and_plot(
 
         # Highlight the best configuration
         plt.scatter(
-            best_conf_thres, best_f1_score, color="blue", s=100, edgecolor="k", zorder=5
+            best_conf_thres, best_f1_score, color="blue", s=150, marker='*', edgecolor="black", zorder=6
         )
         plt.scatter(
             best_conf_thres,
@@ -313,14 +312,27 @@ def img_find_best_conf_threshold_and_plot(
         )
 
         plt.text(
-            best_conf_thres,
-            best_f1_score,
-            f"Best F1: {best_f1_score:.2f}\n"
-            f"Precision: {best_precision:.2f}\n"
-            f"Recall: {best_recall:.2f}\n \n"
-            f"Accuracy: {best_accuracy:.2f}",
-            fontsize=9,
-            verticalalignment="bottom",
+            best_conf_thres + 0.02, best_f1_score,
+            f"Best F1: {best_f1_score:.2f}",
+            fontsize=9, ha='left', va='center', color='blue', weight='bold',
+        )
+
+        plt.text(
+            best_conf_thres + 0.02, best_precision,
+            f"Precision at best threshold: {best_precision:.2f}",
+            fontsize=9, ha='left', va='center', color='green', weight='bold'
+        )
+
+        plt.text(
+            best_conf_thres + 0.02, best_recall,
+            f"Recall at best threshold: {best_recall:.2f}",
+            fontsize=9, ha='left', va='center', color='red', weight='bold',
+        )
+
+        plt.text(
+            best_conf_thres + 0.02, best_accuracy,
+            f"Accuracy at best threshold: {best_accuracy:.2f}",
+            fontsize=9, ha='left', va='center', color='purple', weight='bold',
         )
 
         plt.title(f"{EXPERIMENT_NAME} – Image-Level Metrics vs. Confidence Threshold")
@@ -342,7 +354,7 @@ def obj_find_best_conf_threshold_and_plot(
     obj_f1_scores, obj_precisions, obj_recalls = [], [], []
 
     for conf_thres in conf_thres_range:
-        results = evaluate_predictions(pred_folder, gt_folder, conf_thres, iou_th=0.1)
+        results = evaluate_predictions(pred_folder, gt_folder, conf_thres, iou_th=0.01)
         obj_f1_scores.append(results["obj_f1_score"])
         obj_precisions.append(results["obj_precision"])
         obj_recalls.append(results["obj_recall"])
@@ -379,7 +391,7 @@ def obj_find_best_conf_threshold_and_plot(
 
         # Highlight the best configuration
         plt.scatter(
-            best_conf_thres, best_f1_score, color="blue", s=100, edgecolor="k", zorder=5
+            best_conf_thres, best_f1_score, color="blue", s=150, marker='*', edgecolor="black", zorder=6
         )
         plt.scatter(
             best_conf_thres,
@@ -394,13 +406,21 @@ def obj_find_best_conf_threshold_and_plot(
         )
 
         plt.text(
-            best_conf_thres,
-            best_f1_score,
-            f"Best F1: {best_f1_score:.2f}\n"
-            f"Precision: {best_precision:.2f}\n"
-            f"Recall: {best_recall:.2f}\n \n",
-            fontsize=9,
-            verticalalignment="bottom",
+            best_conf_thres + 0.02, best_f1_score,
+            f"Best F1: {best_f1_score:.2f}",
+            fontsize=9, ha='left', va='center', color='blue', weight='bold',
+        )
+
+        plt.text(
+            best_conf_thres + 0.02, best_precision,
+            f"Precision at best threshold: {best_precision:.2f}",
+            fontsize=9, ha='left', va='center', color='green', weight='bold',
+        )
+
+        plt.text(
+            best_conf_thres + 0.02, best_recall,
+            f"Recall at best threshold: {best_recall:.2f}",
+            fontsize=9, ha='left', va='center', color='red', weight='bold',
         )
 
         plt.title(f"{EXPERIMENT_NAME} – Object-Level Metrics vs. Confidence Threshold")
@@ -465,9 +485,9 @@ if __name__ == "__main__":
         obj_find_best_conf_threshold_and_plot(PRED_FOLDER, GT_FOLDER, conf_range, plot=True)
 
         # Get final detailed results at best threshold for confusion matrix
-        iou_th = 0.1
-        final_results_img = evaluate_predictions(PRED_FOLDER, GT_FOLDER, img_best_conf, iou_th=0.1)
-        final_results_obj = evaluate_predictions(PRED_FOLDER, GT_FOLDER, obj_best_conf, iou_th=0.1)
+        iou_th = 0.01
+        final_results_img = evaluate_predictions(PRED_FOLDER, GT_FOLDER, img_best_conf, iou_th=0.01)
+        final_results_obj = evaluate_predictions(PRED_FOLDER, GT_FOLDER, obj_best_conf, iou_th=0.01)
         
         # Save summary results
         summary = {
@@ -529,8 +549,8 @@ if __name__ == "__main__":
     import seaborn as sns
 
     # IMAGE-LEVEL CONFUSION MATRIX
-    img_cm = np.array([[final_results_img["img_tp"], final_results_img["img_fp"]],
-                   [final_results_img["img_fn"], final_results_img["img_tn"]]])
+    img_cm = np.array([[final_results_img["img_tp"], final_results_img["img_fn"]],
+                   [final_results_img["img_fp"], final_results_img["img_tn"]]])
     plt.figure(figsize=(6, 5))
     sns.heatmap(img_cm, annot=True, fmt="d", cmap="Blues",
                 xticklabels=["Pred Fire", "Pred No Fire"],
@@ -540,10 +560,15 @@ if __name__ == "__main__":
     plt.close()
 
     # OBJECT-LEVEL CONFUSION MATRIX
-    obj_cm = np.array([[final_results_obj["obj_tp"], final_results_obj["obj_fp"]],
-                   [final_results_obj["obj_fn"], 0]])
+    obj_cm = np.array([[final_results_obj["obj_tp"], final_results_obj["obj_fn"]],
+                   [final_results_obj["obj_fp"], 0]])
+
+    # TN for object level is N/A
+    labels = obj_cm.astype(object)
+    labels[1, 1] = "N/A"
+
     plt.figure(figsize=(6, 5))
-    sns.heatmap(obj_cm, annot=True, fmt="d", cmap="Oranges",
+    sns.heatmap(obj_cm, annot=labels, fmt='', cmap="Oranges",
                 xticklabels=["Pred Fire", "Pred No Fire"],
                 yticklabels=["GT Fire", "GT No Fire"])
     plt.title(f"{EXPERIMENT_NAME} – Object-Level Confusion Matrix")

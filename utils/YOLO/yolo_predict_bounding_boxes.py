@@ -414,13 +414,20 @@ def generate_prediction_visualizations(experiment_name: str,
                     
                     obj_output_path = os.path.join(obj_level_dirs[obj_class], obj_filename)
                     
-                    # Create visualization focusing on this specific object
-                    single_obj_classification = [(obj_class, pred_idx, gt_idx, conf, iou)]
+                    # For FN: show ALL predictions to see what caused the miss
+                    # For TP/FP: focus on single object as before
+                    if obj_class == 'FN':
+                        # Show all object classifications to see FP predictions that interfered
+                        visualization_data = obj_classifications
+                        title = f"FN GT_{gt_idx} - All Predictions Shown"
+                    else:
+                        # Focus on single object for TP/FP
+                        visualization_data = [(obj_class, pred_idx, gt_idx, conf, iou)]
+                        title = f"{obj_class} Object (Conf: {conf:.2f}, IoU: {iou:.2f})"
                     
                     draw_predictions_with_classification(
                         image_path, gt_file, pred_file, obj_output_path,
-                        obj_conf_th, single_obj_classification, 
-                        f"{obj_class} Object (Conf: {conf:.2f}, IoU: {iou:.2f})", 'object'
+                        obj_conf_th, visualization_data, title, 'object'
                     )
                 
         if stats['processed_images'] % 50 == 0:
