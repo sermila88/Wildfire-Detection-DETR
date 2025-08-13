@@ -6,13 +6,13 @@ import matplotlib.pyplot as plt
 import pandas as pd
 import seaborn as sns
 
-EXPERIMENT_NAME = "yolo_baseline_v1_IoU=0.01"  # <-- change this per experiment
+EXPERIMENT_NAME = "yolo_baseline_v1_IoU=0.1"  # <-- change this per experiment
 EVAL_DIR = f"outputs/{EXPERIMENT_NAME}/eval_results"
 PLOT_DIR = f"outputs/{EXPERIMENT_NAME}/plots"
 os.makedirs(EVAL_DIR, exist_ok=True)
 os.makedirs(PLOT_DIR, exist_ok=True)
 
-def evaluate_predictions(pred_folder, gt_folder, conf_th=0.1, iou_th=0.01, cat=None):
+def evaluate_predictions(pred_folder, gt_folder, conf_th=0.1, iou_th=0.1, cat=None):
     # For object-level tracking:
     obj_fp, obj_tp, obj_fn = 0, 0, 0 
 
@@ -157,7 +157,7 @@ def find_best_conf_threshold_img(pred_folder, gt_folder, conf_thres_range, cat=N
     best_accuracy_img = 0
 
     for conf_thres in conf_thres_range:
-        results = evaluate_predictions(pred_folder, gt_folder, conf_th=conf_thres, iou_th=0.01, cat=cat)
+        results = evaluate_predictions(pred_folder, gt_folder, conf_th=conf_thres, iou_th=0.1, cat=cat)
         if results["img_f1_score"] > best_f1_score_img:
             best_conf_thres_img = conf_thres
             best_f1_score_img = results["img_f1_score"]
@@ -175,7 +175,7 @@ def find_best_conf_threshold_obj(pred_folder, gt_folder, conf_thres_range, cat=N
     best_recall_obj = 0
 
     for conf_thres in conf_thres_range:
-        results = evaluate_predictions(pred_folder, gt_folder, conf_th=conf_thres, iou_th=0.01, cat=cat)
+        results = evaluate_predictions(pred_folder, gt_folder, conf_th=conf_thres, iou_th=0.1, cat=cat)
         if results["obj_f1_score"] > best_f1_score_obj:
             best_conf_thres_obj = conf_thres
             best_f1_score_obj = results["obj_f1_score"]
@@ -250,7 +250,7 @@ def img_find_best_conf_threshold_and_plot(
     f1_scores, precisions, recalls, accuracies = [], [], [], []
 
     for conf_thres in conf_thres_range:
-        results = evaluate_predictions(pred_folder, gt_folder, conf_thres, iou_th=0.01)
+        results = evaluate_predictions(pred_folder, gt_folder, conf_thres, iou_th=0.1)
         f1_scores.append(results["img_f1_score"])
         precisions.append(results["img_precision"])
         recalls.append(results["img_recall"])
@@ -354,7 +354,7 @@ def obj_find_best_conf_threshold_and_plot(
     obj_f1_scores, obj_precisions, obj_recalls = [], [], []
 
     for conf_thres in conf_thres_range:
-        results = evaluate_predictions(pred_folder, gt_folder, conf_thres, iou_th=0.01)
+        results = evaluate_predictions(pred_folder, gt_folder, conf_thres, iou_th=0.1)
         obj_f1_scores.append(results["obj_f1_score"])
         obj_precisions.append(results["obj_precision"])
         obj_recalls.append(results["obj_recall"])
@@ -485,9 +485,9 @@ if __name__ == "__main__":
         obj_find_best_conf_threshold_and_plot(PRED_FOLDER, GT_FOLDER, conf_range, plot=True)
 
         # Get final detailed results at best threshold for confusion matrix
-        iou_th = 0.01
-        final_results_img = evaluate_predictions(PRED_FOLDER, GT_FOLDER, img_best_conf, iou_th=0.01)
-        final_results_obj = evaluate_predictions(PRED_FOLDER, GT_FOLDER, obj_best_conf, iou_th=0.01)
+        iou_th = 0.1
+        final_results_img = evaluate_predictions(PRED_FOLDER, GT_FOLDER, img_best_conf, iou_th=0.1)
+        final_results_obj = evaluate_predictions(PRED_FOLDER, GT_FOLDER, obj_best_conf, iou_th=0.1)
         
         # Save summary results
         summary = {

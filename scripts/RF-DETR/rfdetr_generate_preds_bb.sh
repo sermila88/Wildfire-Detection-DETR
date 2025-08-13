@@ -10,5 +10,5 @@ source /vol/cuda/12.0.0/setup.sh
 /usr/bin/nvidia-smi
 
 # Run the script
-python /vol/bitbucket/${USER}/rf-detr-wildfire/utils/generate_predictions.py
+python /vol/bitbucket/${USER}/rf-detr-wildfire/utils/RF-DETR/rfdetr_generate_pred_bounding_boxes.py
 
