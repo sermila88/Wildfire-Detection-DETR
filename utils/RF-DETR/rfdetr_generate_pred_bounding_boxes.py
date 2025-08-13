@@ -1,24 +1,23 @@
 """
 RF-DETR Predicted Bounding Box Visualizer with TP/FP/FN/TN Breakdown
-Exactly mirrors the YOLO visualization logic but uses RF-DETR model
 """
 
 import os
 import cv2
 import numpy as np
-from pathlib import Path
 import argparse
-from typing import List, Tuple, Dict
+from typing import List, Tuple
 import json
 from datetime import datetime
-import numpy as np
 from PIL import Image
 from tqdm import tqdm
 import supervision as sv
 from rfdetr import RFDETRBase
-import shutil
+from typing import Dict
+import torch
+from torchvision.ops import box_iou as torch_box_iou
 
-# PyroNear utils functions - EXACT SAME AS YOLO VERSION
+# PyroNear utils functions
 def xywh2xyxy(x):
     """Function to convert bounding box format from center to top-left corner"""
     y = np.zeros_like(x)
@@ -28,22 +27,20 @@ def xywh2xyxy(x):
     y[3] = x[1] + x[3] / 2  # y_max
     return y
 
+
 def box_iou(box1: np.ndarray, box2: np.ndarray, eps: float = 1e-7):
-    # Ensure box1 and box2 are in the shape (N, 4) even if N is 1
+    """Use same IoU calculation as evaluation script"""
+    # Convert to torch tensors (same as evaluation script)
     if box1.ndim == 1:
         box1 = box1.reshape(1, 4)
     if box2.ndim == 1:
         box2 = box2.reshape(1, 4)
-
-    (a1, a2), (b1, b2) = np.split(box1, 2, 1), np.split(box2, 2, 1)
-    inter = (
-        (np.minimum(a2, b2[:, None, :]) - np.maximum(a1, b1[:, None, :]))
-        .clip(0)
-        .prod(2)
-    )
-
-    # IoU = inter / (area1 + area2 - inter)
-    return inter / ((a2 - a1).prod(1) + (b2 - b1).prod(1)[:, None] - inter + eps)
+    
+    box1_torch = torch.tensor(box1, dtype=torch.float32)
+    box2_torch = torch.tensor(box2, dtype=torch.float32)
+    
+    iou_matrix = torch_box_iou(box1_torch, box2_torch)
+    return iou_matrix.numpy()
 
 def xywh_to_xyxy_absolute(x_center, y_center, width, height, img_width, img_height):
     """Convert YOLO format to absolute coordinates"""
@@ -60,7 +57,7 @@ def xywh_to_xyxy_absolute(x_center, y_center, width, height, img_width, img_heig
     return x1, y1, x2, y2
 
 def load_yolo_annotations(label_path: str) -> List[Tuple[int, float, float, float, float]]:
-    """Load YOLO format annotations - EXACT SAME AS YOLO VERSION"""
+    """Load YOLO format annotations"""
     annotations = []
     if os.path.isfile(label_path) and os.path.getsize(label_path) > 0:
         with open(label_path, 'r') as f:
@@ -84,7 +81,7 @@ def load_yolo_annotations(label_path: str) -> List[Tuple[int, float, float, floa
     return annotations
 
 def convert_rfdetr_detections_to_yolo_format(detections, img_width, img_height):
-    """Convert RF-DETR supervision.Detections to YOLO format for compatibility"""
+    """Convert RF-DETR supervision. Detections to YOLO format for compatibility"""
     yolo_predictions = []
     
     if len(detections.xyxy) > 0:
@@ -219,7 +216,7 @@ def draw_predictions_with_classification(image_path: str, gt_boxes: List, pred_b
     # Filter predictions by confidence threshold used for this evaluation
     valid_preds = [box for box in pred_boxes if box[5] >= conf_th]
     
-    # Clean, distinct colors - EXACT SAME AS YOLO
+    # Clean, distinct colors 
     colors = {
         'TP': (0, 255, 0),      # Bright Green - True Positive
         'FP': (0, 0, 255),      # Bright Red - False Positive  
@@ -227,13 +224,13 @@ def draw_predictions_with_classification(image_path: str, gt_boxes: List, pred_b
         'GT': (0, 255, 255),    # Bright Yellow - Ground Truth
     }
     
-    # Draw ground truth boxes (yellow) - EXACT SAME AS YOLO
+    # Draw ground truth boxes (yellow) 
     for i, (class_id, x_center, y_center, width, height, _) in enumerate(gt_boxes):
         x1, y1, x2, y2 = xywh_to_xyxy_absolute(x_center, y_center, width, height, img_width, img_height)
         cv2.rectangle(output_image, (x1, y1), (x2, y2), colors['GT'], 3)
         cv2.putText(output_image, f'GT_{i}', (x1, y1-10), cv2.FONT_HERSHEY_SIMPLEX, 0.6, colors['GT'], 2)
     
-    # Draw ONLY properly classified predictions - EXACT SAME AS YOLO
+    # Draw ONLY properly classified predictions 
     if obj_classifications:
         # Create mapping for quick lookup
         pred_classification_map = {}
@@ -275,7 +272,7 @@ def draw_predictions_with_classification(image_path: str, gt_boxes: List, pred_b
                 cv2.circle(output_image, (x1-20, y1-20), 15, (255, 255, 255), 2)  # White border
                 cv2.putText(output_image, 'FN', (x1-50, y1-25), cv2.FONT_HERSHEY_SIMPLEX, 0.7, colors['FN'], 2)
     
-    # Add clear header with better contrast - EXACT SAME AS YOLO
+    # Add clear header with better contrast
     stats_text = f"{evaluation_type.upper()}: {img_classification} | GT: {len(gt_boxes)} | Pred@{conf_th}: {len(valid_preds)}"
     
     # Large background box for header
@@ -284,7 +281,7 @@ def draw_predictions_with_classification(image_path: str, gt_boxes: List, pred_b
     cv2.rectangle(output_image, (5, 5), (text_w + 20, text_h + 30), (255, 255, 255), 2)
     cv2.putText(output_image, stats_text, (15, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255), 2)
     
-    # Add clean legend in bottom corner - EXACT SAME AS YOLO
+    # Add clean legend in bottom corner 
     legend_y_start = img_height - 100
     legend_items = [
         ("GT (Yellow)", colors['GT']),
@@ -313,8 +310,25 @@ def draw_predictions_with_classification(image_path: str, gt_boxes: List, pred_b
         'evaluation_type': evaluation_type
     }
 
+def get_best_thresholds_from_evaluation(experiment_name="rfdetr_smoke_detection_v1"):
+    """Get the exact best thresholds from evaluation results"""
+    project_root = "/vol/bitbucket/si324/rf-detr-wildfire"
+    eval_results_path = f"{project_root}/outputs/{experiment_name}/eval_results/evaluation_results.json"
+    try:
+        with open(eval_results_path, 'r') as f:
+            eval_data = json.load(f)
+        
+        img_conf_th = eval_data["image_best_results"]["confidence_threshold"]
+        obj_conf_th = eval_data["object_best_results"]["confidence_threshold"]
+        
+        return img_conf_th, obj_conf_th
+    except FileNotFoundError:
+        print("⚠️ Evaluation results not found, using default thresholds")
+        return 0.25, 0.35
+
+
 def generate_rfdetr_prediction_visualizations(experiment_name: str = "rfdetr_smoke_detection_v1"):
-    """Generate RF-DETR prediction visualizations categorized by TP/FP/FN/TN - MIRRORS YOLO VERSION"""
+    """Generate RF-DETR prediction visualizations categorized by TP/FP/FN/TN """
     
     # --- Configuration - MATCH YOUR EXISTING SETUP ---
     DATASET_ROOT = "/vol/bitbucket/si324/rf-detr-wildfire/data/pyro25img/images"
@@ -323,8 +337,7 @@ def generate_rfdetr_prediction_visualizations(experiment_name: str = "rfdetr_smo
     MODEL_PATH = f"/vol/bitbucket/si324/rf-detr-wildfire/outputs/{experiment_name}/checkpoints/checkpoint_best_ema.pth"
     
     # Evaluation parameters - MATCH EVALUATION SCRIPT
-    img_conf_th = 0.25  # Best image-level threshold from evaluation
-    obj_conf_th = 0.35  # Best object-level threshold from evaluation  
+    img_conf_th, obj_conf_th = get_best_thresholds_from_evaluation(experiment_name) 
     iou_th = 0.1        # PyroNear IoU threshold
     
     print(f"🎯 Generating RF-DETR Prediction Visualizations for {experiment_name}")
@@ -336,10 +349,15 @@ def generate_rfdetr_prediction_visualizations(experiment_name: str = "rfdetr_smo
     print(f"🎯 IoU Threshold: {iou_th}")
     
     # --- Load fine-tuned RF-DETR model ---
-    model = RFDETRBase(pretrain_weights=MODEL_PATH, num_classes=1)
-    print(f"✅ RF-DETR model loaded successfully")
+    try:
+        model = RFDETRBase(pretrain_weights=MODEL_PATH, num_classes=1)
+        print(f"✅ RF-DETR model loaded successfully")
+    except Exception as e:
+        print(f"❌ Failed to load RF-DETR model: {e}")
+        return
     
-    # Create output directories - EXACT SAME STRUCTURE AS YOLO
+    
+    # Create output directories 
     output_root = f"/vol/bitbucket/si324/rf-detr-wildfire/bounding_boxes/{experiment_name}/rfdetr_predicted_bb_breakdown"
     
     # Image-level directories
@@ -378,7 +396,7 @@ def generate_rfdetr_prediction_visualizations(experiment_name: str = "rfdetr_smo
     
     print(f"📊 Found {len(all_filenames)} images to process")
     
-    # Statistics - EXACT SAME AS YOLO
+    # Statistics
     stats = {
         'image_level': {'TP': 0, 'FP': 0, 'FN': 0, 'TN': 0},
         'object_level': {'TP': 0, 'FP': 0, 'FN': 0},
@@ -401,7 +419,7 @@ def generate_rfdetr_prediction_visualizations(experiment_name: str = "rfdetr_smo
         
         gt_file = os.path.join(split_gt_dir, f"{filename}.txt")
         
-        # Load GT annotations - EXACT SAME AS YOLO
+        # Load GT annotations 
         gt_boxes = load_yolo_annotations(gt_file)
         
         # Get RF-DETR predictions and convert to YOLO format
@@ -412,26 +430,28 @@ def generate_rfdetr_prediction_visualizations(experiment_name: str = "rfdetr_smo
         # Get image dimensions
         img_width, img_height = original_pil.size
         
-        # Run RF-DETR prediction
-        detections = model.predict(original_pil, threshold=0.05)  # Low threshold, filter later
+        # Run RF-DETR predictions at object threshold 
+        obj_detections = model.predict(original_pil, threshold=obj_conf_th)
+        obj_pred_boxes = convert_rfdetr_detections_to_yolo_format(obj_detections, img_width, img_height)
+
+        # Run separate prediction for image-level visualization
+        img_detections = model.predict(original_pil, threshold=img_conf_th)
+        img_pred_boxes = convert_rfdetr_detections_to_yolo_format(img_detections, img_width, img_height)
+
+        # IMAGE-LEVEL EVALUATION (using image-level predictions)
+        img_classification = evaluate_image_classification(gt_boxes, img_pred_boxes, img_conf_th, iou_th)
+
+        # OBJECT-LEVEL EVALUATION (using object-level predictions at object threshold)
+        obj_classifications = evaluate_object_classifications(gt_boxes, obj_pred_boxes, obj_conf_th, iou_th)
         
-        # Convert RF-DETR detections to YOLO format for compatibility
-        pred_boxes = convert_rfdetr_detections_to_yolo_format(detections, img_width, img_height)
-        
-        # IMAGE-LEVEL EVALUATION (using image-level threshold) - EXACT SAME AS YOLO
-        img_classification = evaluate_image_classification(gt_boxes, pred_boxes, img_conf_th, iou_th)
-        
-        # OBJECT-LEVEL EVALUATION (using object-level threshold) - EXACT SAME AS YOLO
-        obj_classifications = evaluate_object_classifications(gt_boxes, pred_boxes, obj_conf_th, iou_th)
-        
-        # Generate IMAGE-LEVEL visualization - EXACT SAME AS YOLO
+        # Generate IMAGE-LEVEL visualization 
         img_output_path = os.path.join(img_level_dirs[img_classification], f"{filename}_img_th{img_conf_th}.jpg")
         
-        # Generate IMAGE-LEVEL object classifications using IMAGE-LEVEL threshold
-        img_level_obj_classifications = evaluate_object_classifications(gt_boxes, pred_boxes, img_conf_th, iou_th)
-        
+        # Generate IMAGE-LEVEL object classifications using IMAGE-LEVEL predictions
+        img_level_obj_classifications = evaluate_object_classifications(gt_boxes, img_pred_boxes, img_conf_th, iou_th)
+
         img_result = draw_predictions_with_classification(
-            image_path, gt_boxes, pred_boxes, img_output_path,
+            image_path, gt_boxes, img_pred_boxes, img_output_path,
             img_conf_th, img_level_obj_classifications, img_classification, 'image'
         )
 
@@ -445,7 +465,7 @@ def generate_rfdetr_prediction_visualizations(experiment_name: str = "rfdetr_smo
                 if obj_class in stats['object_level']:
                     stats['object_level'][obj_class] += 1
             
-            # Generate OBJECT-LEVEL visualizations - EXACT SAME AS YOLO
+            # Generate OBJECT-LEVEL visualizations 
             for obj_class, pred_idx, gt_idx, conf, iou in obj_classifications:
                 if obj_class in obj_level_dirs:  # TP, FP, or FN
                     # Create unique filename for each object instance
@@ -468,14 +488,14 @@ def generate_rfdetr_prediction_visualizations(experiment_name: str = "rfdetr_smo
                         title = f"{obj_class} Object (Conf: {conf:.2f}, IoU: {iou:.2f})"
                     
                     draw_predictions_with_classification(
-                        image_path, gt_boxes, pred_boxes, obj_output_path,
+                        image_path, gt_boxes, obj_pred_boxes, obj_output_path,
                         obj_conf_th, visualization_data, title, 'object'
                     )
         
         if stats['processed_images'] % 50 == 0:
             print(f"⏳ Processed {stats['processed_images']}/{len(all_filenames)} images...")
     
-    # Save statistics - EXACT SAME AS YOLO
+    # Save statistics 
     def convert_numpy_types(obj):
         if isinstance(obj, np.integer):
             return int(obj)
@@ -524,7 +544,7 @@ def generate_rfdetr_prediction_visualizations(experiment_name: str = "rfdetr_smo
     for classification, count in stats['object_level'].items():
         print(f"   {classification}: {count}")
     
-    # Verification - EXACT SAME AS YOLO
+    # Verification
     print(f"\n🗂️ Object-Level Folder Distribution:")
     total_obj_files = 0
     for obj_type in ['TP', 'FP', 'FN']:

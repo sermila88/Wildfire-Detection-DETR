@@ -215,7 +215,7 @@ def has_spatial_overlap(predictions, ground_truth):
 
 
 def _object_tp_fp_fn_for_image(preds, annotations, iou_th=IOU_THRESHOLD):
-    """Compute object-level TP/FP/FN for a single image (YOLO-style matching)."""
+    """Compute object-level TP/FP/FN for a single image """
     gt = np.array(annotations.xyxy)
     pr = np.array(preds.xyxy)
     tp = fp = fn = 0
@@ -279,7 +279,7 @@ def _counts_at_conf(model, dataset, conf):
             if has_smoke_pred: img_fp += 1
             else:              img_tn += 1
 
-        # ---- object-level (YOLO-style) ----
+        # ---- object-level  ----
         tpo, fpo, fno = _object_tp_fp_fn_for_image(preds, annotations, IOU_THRESHOLD)
         obj_tp += tpo; obj_fp += fpo; obj_fn += fno
 
