@@ -166,9 +166,9 @@ def objective_pyronear(trial):
     trial_params['effective_batch_size'] = batch_size * grad_accum_steps
     trial_params['evaluation_method'] = 'pyronear_style'
     
-    print(f"\n🎯 Trial {trial.number}: lr={lr:.2e}, resolution={resolution}, batch={batch_size}")
-    print(f"📁 Trial directory: {trial_dir}")
-    print(f"🔥 Using PyroNear-style evaluation (Precision/Recall/F1)")
+    print(f"\n Trial {trial.number}: lr={lr:.2e}, resolution={resolution}, batch={batch_size}")
+    print(f" Trial directory: {trial_dir}")
+    print(f" Using PyroNear-style evaluation (Precision/Recall/F1)")
     
     try:
         # Train model
@@ -244,10 +244,10 @@ def objective_pyronear(trial):
         with open(os.path.join(trial_dir, "pyronear_final_results.json"), "w") as f:
             json.dump(results, f, indent=2)
         
-        print(f"✅ Trial {trial.number}: F1={f1_score:.4f}, P={eval_results['best_precision']:.4f}, R={eval_results['best_recall']:.4f}")
-        print(f"🎯 Best confidence threshold: {eval_results['best_confidence_threshold']:.3f}")
-        print(f"⏱️  Training time: {training_time/3600:.1f}h")
-        print(f"💾 All data saved to: {trial_dir}")
+        print(f" Trial {trial.number}: F1={f1_score:.4f}, P={eval_results['best_precision']:.4f}, R={eval_results['best_recall']:.4f}")
+        print(f" Best confidence threshold: {eval_results['best_confidence_threshold']:.3f}")
+        print(f"  Training time: {training_time/3600:.1f}h")
+        print(f" All data saved to: {trial_dir}")
         
         # Cleanup
         del model
@@ -260,7 +260,7 @@ def objective_pyronear(trial):
         return f1_score  # Optimize for F1 score instead of mAP
         
     except Exception as e:
-        print(f"❌ Trial {trial.number} failed: {e}")
+        print(f" Trial {trial.number} failed: {e}")
         
         # Save failure information
         failure_info = {

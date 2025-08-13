@@ -9,8 +9,6 @@ import numpy as np
 import matplotlib.pyplot as plt
 from tqdm import tqdm
 from PIL import Image
-import torch
-from torchvision.ops import box_iou
 import supervision as sv
 from rfdetr import RFDETRBase
 import seaborn as sns
@@ -33,8 +31,7 @@ PLOTS_DIR = f"{EXPERIMENT_DIR}/plots"
 
 # Evaluation parameters (PyroNear methodology)
 CONFIDENCE_THRESHOLDS = np.arange(0.1, 0.9, 0.05)
-SPATIAL_IOU_THRESHOLD = 0.1  # PyroNear baseline
-YOLO_BASELINE_IOU = 0.1
+IOU_THRESHOLD = 0.1  # PyroNear baseline
 
 # Create output directories
 os.makedirs(EVAL_RESULTS_DIR, exist_ok=True)
@@ -43,17 +40,59 @@ os.makedirs(PLOTS_DIR, exist_ok=True)
 print(f"🎯 RF-DETR Wildfire Smoke Detection Evaluation")
 print(f"📁 Experiment: {EXPERIMENT_NAME}")
 
+
+# ============================================================================
+# PYRONEAR UTILITY FUNCTIONS
+# ============================================================================
+def xywh2xyxy(x):
+    """Function to convert bounding box format from center to top-left corner"""
+    y = np.zeros_like(x)
+    y[0] = x[0] - x[2] / 2  # x_min
+    y[1] = x[1] - x[3] / 2  # y_min
+    y[2] = x[0] + x[2] / 2  # x_max
+    y[3] = x[1] + x[3] / 2  # y_max
+    return y
+
+
+def box_iou(box1: np.ndarray, box2: np.ndarray, eps: float = 1e-7):
+    """
+    Calculate intersection-over-union (IoU) of boxes.
+    Both sets of boxes are expected to be in (x1, y1, x2, y2) format.
+    Based on https://github.com/pytorch/vision/blob/master/torchvision/ops/boxes.py
+
+    Args:
+        box1 (np.ndarray): A numpy array of shape (N, 4) representing N bounding boxes.
+        box2 (np.ndarray): A numpy array of shape (M, 4) representing M bounding boxes.
+        eps (float, optional): A small value to avoid division by zero. Defaults to 1e-7.
+
+    Returns:
+        (np.ndarray): An NxM numpy array containing the pairwise IoU values for every element in box1 and box2.
+    """
+
+    # Ensure box1 and box2 are in the shape (N, 4) even if N is 1
+    if box1.ndim == 1:
+        box1 = box1.reshape(1, 4)
+    if box2.ndim == 1:
+        box2 = box2.reshape(1, 4)
+
+    (a1, a2), (b1, b2) = np.split(box1, 2, 1), np.split(box2, 2, 1)
+    inter = (
+        (np.minimum(a2, b2[:, None, :]) - np.maximum(a1, b1[:, None, :]))
+        .clip(0)
+        .prod(2)
+    )
+
+    # IoU = inter / (area1 + area2 - inter)
+    return inter / ((a2 - a1).prod(1) + (b2 - b1).prod(1)[:, None] - inter + eps)
+
 # ============================================================================
 # LOAD YOLO BASELINE FOR COMPARISON
 # ============================================================================
-def _format_iou_tag(iou: float) -> str:
-    s = f"{iou:.2f}"                  # "0.10" or "0.01"
-    return s.rstrip("0").rstrip(".")  # -> "0.1" or "0.01"
 
-def load_yolo_baseline(iou_for_baseline: float = YOLO_BASELINE_IOU):
+
+def load_yolo_baseline():
     """Load YOLO baseline (image + object level) from saved summary JSON."""
-    tag = _format_iou_tag(iou_for_baseline)
-    path = f"{PROJECT_ROOT}/outputs/yolo_baseline_v1_IoU={tag}/eval_results/summary_results.json"
+    path = f"{PROJECT_ROOT}/outputs/yolo_baseline_v1_IoU=0.1/eval_results/summary_results.json"
     try:
         with open(path, "r") as f:
             data = json.load(f)
@@ -83,7 +122,7 @@ def load_yolo_baseline(iou_for_baseline: float = YOLO_BASELINE_IOU):
         print(f"⚠️  YOLO baseline file not found at:\n    {path}")
         return {
             "experiment_name": "yolo_baseline_fallback",
-            "iou_threshold": iou_for_baseline,
+            "iou_threshold": 0.1,
             "image": {
                 "best_threshold": 0.1,
                 "metrics": {"f1_score": 0.0, "precision": 0.0, "recall": 0.0, "accuracy": 0.0},
@@ -109,9 +148,7 @@ def load_model():
         exit(1)
     
     print(f"✅ Loading RF-DETR from: {checkpoint_path}")
-    model = RFDETRBase(pretrain_weights=checkpoint_path)
-    model = model.optimize_for_inference()
-    model.eval()  
+    model = RFDETRBase(pretrain_weights=checkpoint_path, num_classes=1)
     return model
 
 # ============================================================================
@@ -161,25 +198,23 @@ def load_dataset():
 # ============================================================================
 # PYRONEAR-STYLE EVALUATION
 # ============================================================================
+
 def has_spatial_overlap(predictions, ground_truth):
-    """
-    Check if predictions have spatial overlap with ground truth
-    Uses PyroNear's 0.1 IoU threshold for spatial matching
-    """
+    """Check if predictions have spatial overlap with ground truth 
+    using PyroNear's IoU"""
     if len(predictions.xyxy) == 0 or len(ground_truth.xyxy) == 0:
         return False
     
-    # Convert to torch tensors for IoU calculation
-    pred_boxes = torch.tensor(predictions.xyxy, dtype=torch.float32)
-    gt_boxes = torch.tensor(ground_truth.xyxy, dtype=torch.float32)
-    
-    # Calculate IoU matrix and check for sufficient overlap
-    ious = box_iou(pred_boxes, gt_boxes)
-    return (ious > SPATIAL_IOU_THRESHOLD).any().item()
+    for pred_box in predictions.xyxy:
+        for gt_box in ground_truth.xyxy:
+            iou_matrix = box_iou(pred_box, gt_box)
+            iou = iou_matrix[0, 0]  # Extract single IoU value
+            if iou > IOU_THRESHOLD:
+                return True
+    return False
 
-# --- REPLACE evaluate_at_confidence AND evaluate_model WITH THIS ---
 
-def _object_tp_fp_fn_for_image(preds, annotations, iou_th=SPATIAL_IOU_THRESHOLD):
+def _object_tp_fp_fn_for_image(preds, annotations, iou_th=IOU_THRESHOLD):
     """Compute object-level TP/FP/FN for a single image (YOLO-style matching)."""
     gt = np.array(annotations.xyxy)
     pr = np.array(preds.xyxy)
@@ -192,22 +227,22 @@ def _object_tp_fp_fn_for_image(preds, annotations, iou_th=SPATIAL_IOU_THRESHOLD)
 
     for pb in pr:
         if len(gt):
-            ious = box_iou(
-                torch.tensor(pb).unsqueeze(0).float(),
-                torch.tensor(gt).float()
-            ).squeeze(0)
-            if ious.numel() > 0:
-                m, idx = torch.max(ious, dim=0)
-                idx = int(idx.item())
-                if m.item() > iou_th and not matched[idx]:
+            ious = []
+            for gt_box in gt:
+                iou_matrix = box_iou(pb, gt_box)
+                iou_val = iou_matrix[0, 0]  # Extract single IoU value
+                ious.append(iou_val)
+            ious = np.array(ious)
+            if len(ious) > 0:
+                max_iou = np.max(ious)
+                idx = int(np.argmax(ious))
+                if max_iou > iou_th and not matched[idx]:
                     tp += 1
                     matched[idx] = True
                 else:
                     fp += 1
             else:
                 fp += 1
-        else:
-            fp += 1
 
     if len(gt):
         fn += int((~matched).sum())
@@ -245,7 +280,7 @@ def _counts_at_conf(model, dataset, conf):
             else:              img_tn += 1
 
         # ---- object-level (YOLO-style) ----
-        tpo, fpo, fno = _object_tp_fp_fn_for_image(preds, annotations, SPATIAL_IOU_THRESHOLD)
+        tpo, fpo, fno = _object_tp_fp_fn_for_image(preds, annotations, IOU_THRESHOLD)
         obj_tp += tpo; obj_fp += fpo; obj_fn += fno
 
     return (img_tp, img_fp, img_fn, img_tn), (obj_tp, obj_fp, obj_fn)
@@ -352,20 +387,26 @@ def create_image_confusion_matrix_from_row(img_best_row):
     sns.heatmap(cm, annot=True, fmt="d", cmap="Blues",
                 xticklabels=["Pred Fire", "Pred No Fire"],
                 yticklabels=["GT Fire", "GT No Fire"])
-    plt.title(f"{EXPERIMENT_NAME} – Image-Level Confusion Matrix (IoU={SPATIAL_IOU_THRESHOLD})")
+    plt.title(f"{EXPERIMENT_NAME} – Image-Level Confusion Matrix (IoU={IOU_THRESHOLD})")
     out = f"{PLOTS_DIR}/image_conf_matrix.png"
     plt.savefig(out, dpi=150, bbox_inches="tight"); plt.close()
     return out
 
 
 def create_object_confusion_matrix_from_row(obj_best_row):
-    cm = np.array([[obj_best_row["tp"], obj_best_row["fn"]],
-                   [obj_best_row["fp"], "N/A"]], dtype=object)
+    # Create numeric matrix for heatmap
+    cm_numeric = np.array([[obj_best_row["tp"], obj_best_row["fn"]],
+                          [obj_best_row["fp"], 0]])
+    
+    # Create annotation matrix with N/A
+    cm_labels = np.array([[str(obj_best_row["tp"]), str(obj_best_row["fn"])],
+                         [str(obj_best_row["fp"]), "N/A"]])
+    
     plt.figure(figsize=(6, 5))
-    sns.heatmap(cm, annot=True, fmt="", cmap="Oranges",
+    sns.heatmap(cm_numeric, annot=cm_labels, fmt="", cmap="Oranges",
                 xticklabels=["Pred Fire", "Pred No Fire"],
                 yticklabels=["GT Fire", "GT No Fire"])
-    plt.title(f"{EXPERIMENT_NAME} – Object-Level Confusion Matrix (TN = N/A, IoU={SPATIAL_IOU_THRESHOLD})")
+    plt.title(f"{EXPERIMENT_NAME} – Object-Level Confusion Matrix (TN = N/A, IoU={IOU_THRESHOLD})")
     out = f"{PLOTS_DIR}/object_conf_matrix.png"
     plt.savefig(out, dpi=150, bbox_inches="tight"); plt.close()
     return out
@@ -386,7 +427,8 @@ def save_results(img_results, obj_results, yolo_baseline, img_best, obj_best):
     evaluation_data = {
         "experiment_info": {
             "experiment_name": EXPERIMENT_NAME,
-            "spatial_iou_threshold": SPATIAL_IOU_THRESHOLD,
+            "iou_threshold": IOU_THRESHOLD, # this eval's IoU
+            "yolo_baseline_iou_threshold": yolo_baseline.get("iou_threshold", None),
             "dataset_path": DATASET_PATH
         },
         "image_best_results": {
@@ -426,6 +468,38 @@ def save_results(img_results, obj_results, yolo_baseline, img_best, obj_best):
             "object_level": obj_results
         }
     }
+        # NEW: human-friendly per-level summary (easy to copy into thesis)
+    eval_summary_path = f"{EVAL_RESULTS_DIR}/evaluation_summary.txt"
+    with open(eval_summary_path, "w") as f:
+        f.write(f"Experiment: {EXPERIMENT_NAME}\n")
+        f.write("=" * 50 + "\n\n")
+        f.write(f"IoU threshold (this eval): {IOU_THRESHOLD}\n")
+        f.write(f"YOLO baseline IoU: {yolo_baseline.get('iou_threshold', 'N/A')}\n")
+
+        f.write("IMAGE LEVEL PRIMARY METRICS:\n")
+        f.write(f"Precision: {img_best['precision']:.4f}\n")
+        f.write(f"Recall: {img_best['recall']:.4f}\n")
+        f.write(f"F1 Score: {img_best['f1_score']:.4f}\n")
+        f.write(f"Accuracy: {img_best['accuracy']:.4f}\n\n")
+
+        f.write("IMAGE LEVEL CONFUSION MATRIX:\n")
+        f.write(f"TP: {int(img_best['tp'])}\n")
+        f.write(f"TN: {int(img_best['tn'])}\n")
+        f.write(f"FP: {int(img_best['fp'])}\n")
+        f.write(f"FN: {int(img_best['fn'])}\n\n")
+
+        f.write("OBJECT LEVEL PRIMARY METRICS:\n")
+        f.write(f"Precision: {obj_best['precision']:.4f}\n")
+        f.write(f"Recall: {obj_best['recall']:.4f}\n")
+        f.write(f"F1 Score: {obj_best['f1_score']:.4f}\n")
+        f.write("Accuracy: N/A\n\n")  # no TN at object-level → accuracy undefined
+
+        f.write("OBJECT LEVEL CONFUSION MATRIX:\n")
+        f.write(f"TP: {int(obj_best['tp'])}\n")
+        f.write("TN: N/A\n")
+        f.write(f"FP: {int(obj_best['fp'])}\n")
+        f.write(f"FN: {int(obj_best['fn'])}\n")
+
 
     results_path = f"{EVAL_RESULTS_DIR}/evaluation_results.json"
     with open(results_path, 'w') as f:
@@ -433,22 +507,35 @@ def save_results(img_results, obj_results, yolo_baseline, img_best, obj_best):
 
     summary_path = f"{EVAL_RESULTS_DIR}/comparison_summary.txt"
     with open(summary_path, 'w') as f:
-        f.write("RF-DETR vs YOLO Baseline (Image & Object Levels)\n")
-        f.write("="*48 + "\n\n")
+        f.write(f"Experiment: {EXPERIMENT_NAME}\n\n")
+        f.write("RF-DETR vs YOLO Baseline \n")
+        f.write("=" * 48 + "\n\n")
+        f.write(f"IoU threshold (this eval): {IOU_THRESHOLD}\n")
+        f.write(f"YOLO baseline IoU: {yolo_baseline.get('iou_threshold', 'N/A')}\n")
+
         f.write("YOLO Baseline (Image Level):\n")
-        f.write(f"  F1: {yolo_img['f1_score']:.4f}  P: {yolo_img['precision']:.4f}  R: {yolo_img['recall']:.4f}  Acc: {yolo_img['accuracy']:.4f}\n")
-        f.write("YOLO Baseline (Object Level):\n")
-        f.write(f"  F1: {yolo_obj['f1_score']:.4f}  P: {yolo_obj['precision']:.4f}  R: {yolo_obj['recall']:.4f}\n\n")
+        f.write(f"  F1: {yolo_img['f1_score']:.4f}  Precision: {yolo_img['precision']:.4f}  "
+                f"Recall: {yolo_img['recall']:.4f}  Accuracy: {yolo_img['accuracy']:.4f}\n\n")
+
         f.write("RF-DETR (Image Level):\n")
-        f.write(f"  F1: {img_best['f1_score']:.4f}  P: {img_best['precision']:.4f}  R: {img_best['recall']:.4f}  Acc: {img_best['accuracy']:.4f}  @conf={img_best['confidence_threshold']:.2f}\n")
+        f.write(f"  F1: {img_best['f1_score']:.4f}  Precision: {img_best['precision']:.4f}  "
+                f"Recall: {img_best['recall']:.4f}  Accuracy: {img_best['accuracy']:.4f}  "
+                f"@conf={img_best['confidence_threshold']:.2f}\n\n")
+
+        f.write("YOLO Baseline (Object Level):\n")
+        f.write(f"  F1: {yolo_obj['f1_score']:.4f}  Precision: {yolo_obj['precision']:.4f}  "
+                f"Recall: {yolo_obj['recall']:.4f}\n\n")
+
         f.write("RF-DETR (Object Level):\n")
-        f.write(f"  F1: {obj_best['f1_score']:.4f}  P: {obj_best['precision']:.4f}  R: {obj_best['recall']:.4f}  @conf={obj_best['confidence_threshold']:.2f}\n\n")
-        f.write("Improvements vs YOLO:\n")
+        f.write(f"  F1: {obj_best['f1_score']:.4f}  Precision: {obj_best['precision']:.4f}  "
+                f"Recall: {obj_best['recall']:.4f}  @conf={obj_best['confidence_threshold']:.2f}\n\n")
+
+        f.write("Improvements on YOLO Baseline:\n")
         f.write(f"  Image F1: {imp_img_pct:+.1f}%\n")
         f.write(f"  Object F1: {imp_obj_pct:+.1f}%\n")
 
-    print(f"💾 Results saved:\n  📄 {results_path}\n  📊 {summary_path}")
-    return img_best
+    print(f"💾 Results saved:\n  📄 {results_path}\n  📊 {summary_path} 📝 {eval_summary_path}")
+
 
 # ============================================================================
 # MAIN EXECUTION

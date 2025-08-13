@@ -62,9 +62,9 @@ model.train(
     device="cuda",      
     use_amp=True,  # Mixed precision 
     ddp=False,
-    output_dir=checkpoints_dir  # All model outputs go to checkpoints/
+    output_dir=checkpoints_dir  
 )
 
-print(f"\n✅ Training completed!")
-print(f"📁 Checkpoints saved to: {checkpoints_dir}")
-print(f"🔍 To evaluate, use experiment name: {EXPERIMENT_NAME}")
+print(f"\n Training completed")
+print(f" Checkpoints saved to: {checkpoints_dir}")
+print(f" To evaluate, use experiment name: {EXPERIMENT_NAME}")
