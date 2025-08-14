@@ -14,8 +14,6 @@ from tqdm import tqdm
 import supervision as sv
 from rfdetr import RFDETRBase
 from typing import Dict
-import torch
-from torchvision.ops import box_iou as torch_box_iou
 
 # PyroNear utils functions
 def xywh2xyxy(x):
@@ -29,31 +27,48 @@ def xywh2xyxy(x):
 
 
 def box_iou(box1: np.ndarray, box2: np.ndarray, eps: float = 1e-7):
-    """Use same IoU calculation as evaluation script"""
-    # Convert to torch tensors (same as evaluation script)
+    """
+    Calculate intersection-over-union (IoU) of boxes.
+    Both sets of boxes are expected to be in (x1, y1, x2, y2) format.
+    Based on https://github.com/pytorch/vision/blob/master/torchvision/ops/boxes.py
+
+    Args:
+        box1 (np.ndarray): A numpy array of shape (N, 4) representing N bounding boxes.
+        box2 (np.ndarray): A numpy array of shape (M, 4) representing M bounding boxes.
+        eps (float, optional): A small value to avoid division by zero. Defaults to 1e-7.
+
+    Returns:
+        (np.ndarray): An NxM numpy array containing the pairwise IoU values for every element in box1 and box2.
+    """
+
+    # Ensure box1 and box2 are in the shape (N, 4) even if N is 1
     if box1.ndim == 1:
         box1 = box1.reshape(1, 4)
     if box2.ndim == 1:
         box2 = box2.reshape(1, 4)
-    
-    box1_torch = torch.tensor(box1, dtype=torch.float32)
-    box2_torch = torch.tensor(box2, dtype=torch.float32)
-    
-    iou_matrix = torch_box_iou(box1_torch, box2_torch)
-    return iou_matrix.numpy()
+
+    (a1, a2), (b1, b2) = np.split(box1, 2, 1), np.split(box2, 2, 1)
+    inter = (
+        (np.minimum(a2, b2[:, None, :]) - np.maximum(a1, b1[:, None, :]))
+        .clip(0)
+        .prod(2)
+    )
+
+    # IoU = inter / (area1 + area2 - inter)
+    return inter / ((a2 - a1).prod(1) + (b2 - b1).prod(1)[:, None] - inter + eps)
 
 def xywh_to_xyxy_absolute(x_center, y_center, width, height, img_width, img_height):
-    """Convert YOLO format to absolute coordinates"""
+    """Convert YOLO (normalized xywh) to absolute pixel xyxy (floats)."""
     x_center_abs = x_center * img_width
     y_center_abs = y_center * img_height
     width_abs = width * img_width
     height_abs = height * img_height
-    
-    x1 = int(x_center_abs - width_abs / 2)
-    y1 = int(y_center_abs - height_abs / 2)
-    x2 = int(x_center_abs + width_abs / 2)
-    y2 = int(y_center_abs + height_abs / 2)
-    
+
+    x1 = x_center_abs - width_abs / 2.0
+    y1 = y_center_abs - height_abs / 2.0
+    x2 = x_center_abs + width_abs / 2.0
+    y2 = y_center_abs + height_abs / 2.0
+
     return x1, y1, x2, y2
 
 def load_yolo_annotations(label_path: str) -> List[Tuple[int, float, float, float, float]]:
@@ -103,12 +118,9 @@ def convert_rfdetr_detections_to_yolo_format(detections, img_width, img_height):
     
     return yolo_predictions
 
-def evaluate_image_classification(gt_boxes, pred_boxes, conf_th=0.1, iou_th=0.1):
-    """
-    Evaluate image-level classification for a single image
-    EXACTLY MATCHES the evaluation logic from your eval script
-    """
-    # Convert to xyxy format for IoU calculation
+def evaluate_image_classification(gt_boxes, pred_boxes, img_width, img_height, conf_th=0.1, iou_th=0.1):
+    """EXACT MATCH to eval script logic"""
+    # Convert to xyxy format for IoU calculation - SAME AS EVAL SCRIPT
     gt_xyxy = [xywh2xyxy(np.array(box[1:5])) for box in gt_boxes]
     
     # Track GT matches for spatial overlap check
@@ -148,55 +160,50 @@ def evaluate_image_classification(gt_boxes, pred_boxes, conf_th=0.1, iou_th=0.1)
     else:
         return 'FP' if has_smoke_pred else 'TN'
 
-def evaluate_object_classifications(gt_boxes, pred_boxes, conf_th=0.2, iou_th=0.1):
+def evaluate_object_classifications(
+    gt_boxes, pred_boxes, img_width, img_height, conf_th=0.2, iou_th=0.1
+):
     """
-    Evaluate object-level classifications for a single image
-    EXACTLY MATCHES the evaluation logic from your eval script
+    Baseline-compatible object-level classification:
+    - 1–1 matching by max IoU > iou_th
+    - Unmatched GT -> FN
+    - No GT but predictions above conf -> FP (count them)
     """
     # Filter predictions by confidence
     valid_preds = [box for box in pred_boxes if box[5] >= conf_th]
-    
-    # Convert to xyxy format for IoU calculation
+
+    # Convert GT to xyxy (IoU is scale-invariant, normalized is fine)
     gt_xyxy = [xywh2xyxy(np.array(box[1:5])) for box in gt_boxes]
-    pred_xyxy = [xywh2xyxy(np.array(box[1:5])) for box in valid_preds]
-    
-    # Object-level evaluation
+
     gt_matches = np.zeros(len(gt_boxes), dtype=bool)
     obj_classifications = []
-    
-    # Check each valid prediction
+
+    # ---- predictions above threshold ----
     for i, pred_box in enumerate(valid_preds):
-        pred_xyxy_box = pred_xyxy[i]
+        pred_xyxy = xywh2xyxy(np.array(pred_box[1:5]))
         confidence = pred_box[5]
-        
-        if gt_xyxy:
-            # Find best IoU match - exactly like eval script
-            iou_values = []
-            for gt_box in gt_xyxy:
-                iou_matrix = box_iou(pred_xyxy_box, gt_box)
-                iou_scalar = float(iou_matrix[0, 0]) if iou_matrix.size > 0 else 0.0
-                iou_values.append(iou_scalar)
-            
-            if iou_values:
-                max_iou = max(iou_values)
-                best_match_idx = np.argmax(iou_values)
-                
-                if max_iou > iou_th and not gt_matches[best_match_idx]:
-                    obj_classifications.append(('TP', i, best_match_idx, confidence, max_iou))
-                    gt_matches[best_match_idx] = True
-                else:
-                    obj_classifications.append(('FP', i, -1, confidence, max_iou))
+
+        if gt_xyxy:  # has GT → evaluate TP/FP against GT
+            iou_values = [float(box_iou(pred_xyxy, gt_box)[0, 0]) for gt_box in gt_xyxy]
+            max_iou = max(iou_values) if iou_values else 0.0
+            best_match_idx = int(np.argmax(iou_values)) if iou_values else -1
+
+            if best_match_idx >= 0 and max_iou > iou_th and not gt_matches[best_match_idx]:
+                obj_classifications.append(('TP', i, best_match_idx, confidence, max_iou))
+                gt_matches[best_match_idx] = True
             else:
-                obj_classifications.append(('FP', i, -1, confidence, 0.0))
+                obj_classifications.append(('FP', i, -1, confidence, max_iou))
         else:
+            # No GT: every valid prediction is a False Positive
             obj_classifications.append(('FP', i, -1, confidence, 0.0))
-    
-    # Count FN (unmatched GT boxes)
-    for i, matched in enumerate(gt_matches):
+
+    # ---- any unmatched GT is a False Negative ----
+    for gi, matched in enumerate(gt_matches):
         if not matched:
-            obj_classifications.append(('FN', -1, i, 0.0, 0.0))
-    
+            obj_classifications.append(('FN', -1, gi, 0.0, 0.0))
+
     return obj_classifications
+
 
 def draw_predictions_with_classification(image_path: str, gt_boxes: List, pred_boxes: List, 
                                        output_path: str, conf_th: float,
@@ -227,8 +234,9 @@ def draw_predictions_with_classification(image_path: str, gt_boxes: List, pred_b
     # Draw ground truth boxes (yellow) 
     for i, (class_id, x_center, y_center, width, height, _) in enumerate(gt_boxes):
         x1, y1, x2, y2 = xywh_to_xyxy_absolute(x_center, y_center, width, height, img_width, img_height)
-        cv2.rectangle(output_image, (x1, y1), (x2, y2), colors['GT'], 3)
-        cv2.putText(output_image, f'GT_{i}', (x1, y1-10), cv2.FONT_HERSHEY_SIMPLEX, 0.6, colors['GT'], 2)
+        x1i, y1i, x2i, y2i = int(round(x1)), int(round(y1)), int(round(x2)), int(round(y2))
+        cv2.rectangle(output_image, (x1i, y1i), (x2i, y2i), colors['GT'], 3)
+        cv2.putText(output_image, f'GT_{i}', (x1i, y1i-10), cv2.FONT_HERSHEY_SIMPLEX, 0.6, colors['GT'], 2)
     
     # Draw ONLY properly classified predictions 
     if obj_classifications:
@@ -242,6 +250,7 @@ def draw_predictions_with_classification(image_path: str, gt_boxes: List, pred_b
         for i, pred_box in enumerate(valid_preds):
             x_center, y_center, width, height, confidence = pred_box[1:6]
             x1, y1, x2, y2 = xywh_to_xyxy_absolute(x_center, y_center, width, height, img_width, img_height)
+            x1i, y1i, x2i, y2i = int(round(x1)), int(round(y1)), int(round(x2)), int(round(y2))
             
             # Only draw if properly classified
             if i in pred_classification_map:
@@ -249,16 +258,16 @@ def draw_predictions_with_classification(image_path: str, gt_boxes: List, pred_b
                 color = colors[classification]
                 
                 # Draw thick, visible box
-                cv2.rectangle(output_image, (x1-2, y1-2), (x2+2, y2+2), color, 4)
+                cv2.rectangle(output_image, (x1i-2, y1i-2), (x2i+2, y2i+2), color, 4)
                 
                 # Clear label with classification, confidence AND IoU
                 label = f'{classification}: {conf:.2f} IoU:{iou:.2f}'
                 
                 # Position labels with black background for readability
-                label_y = y2 + 25 + (i * 20)
+                label_y = y2i + 25 + (i * 20)
                 (text_w, text_h), _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.6, 2)
-                cv2.rectangle(output_image, (x1-2, label_y-text_h-5), (x1+text_w+5, label_y+5), (0, 0, 0), -1)
-                cv2.putText(output_image, label, (x1, label_y), cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2)
+                cv2.rectangle(output_image, (x1i-2, label_y-text_h-5), (x1i+text_w+5, label_y+5), (0, 0, 0), -1)
+                cv2.putText(output_image, label, (x1i, label_y), cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2)
         
         # Draw FN markers on unmatched GT boxes
         for classification, pred_idx, gt_idx, confidence, iou in obj_classifications:
@@ -266,11 +275,12 @@ def draw_predictions_with_classification(image_path: str, gt_boxes: List, pred_b
                 gt_box = gt_boxes[gt_idx]
                 x_center, y_center, width, height = gt_box[1:5]
                 x1, y1, x2, y2 = xywh_to_xyxy_absolute(x_center, y_center, width, height, img_width, img_height)
+                x1i, y1i = int(round(x1)), int(round(y1))
                 
                 # Draw large, visible FN marker
-                cv2.circle(output_image, (x1-20, y1-20), 15, colors['FN'], -1)
-                cv2.circle(output_image, (x1-20, y1-20), 15, (255, 255, 255), 2)  # White border
-                cv2.putText(output_image, 'FN', (x1-50, y1-25), cv2.FONT_HERSHEY_SIMPLEX, 0.7, colors['FN'], 2)
+                cv2.circle(output_image, (x1i-20, y1i-20), 15, colors['FN'], -1)
+                cv2.circle(output_image, (x1i-20, y1i-20), 15, (255, 255, 255), 2)  # White border
+                cv2.putText(output_image, 'FN', (x1i-50, y1i-25), cv2.FONT_HERSHEY_SIMPLEX, 0.7, colors['FN'], 2)
     
     # Add clear header with better contrast
     stats_text = f"{evaluation_type.upper()}: {img_classification} | GT: {len(gt_boxes)} | Pred@{conf_th}: {len(valid_preds)}"
@@ -333,7 +343,6 @@ def generate_rfdetr_prediction_visualizations(experiment_name: str = "rfdetr_smo
     # --- Configuration - MATCH YOUR EXISTING SETUP ---
     DATASET_ROOT = "/vol/bitbucket/si324/rf-detr-wildfire/data/pyro25img/images"
     GT_LABELS_ROOT = "/vol/bitbucket/si324/rf-detr-wildfire/data/pyro25img/labels"
-    OUTPUT_ROOT = f"/vol/bitbucket/si324/rf-detr-wildfire/bounding_boxes/Pyro25Images/predicted_bboxes/{experiment_name}"
     MODEL_PATH = f"/vol/bitbucket/si324/rf-detr-wildfire/outputs/{experiment_name}/checkpoints/checkpoint_best_ema.pth"
     
     # Evaluation parameters - MATCH EVALUATION SCRIPT
@@ -356,23 +365,22 @@ def generate_rfdetr_prediction_visualizations(experiment_name: str = "rfdetr_smo
         print(f"❌ Failed to load RF-DETR model: {e}")
         return
     
-    
     # Create output directories 
-    output_root = f"/vol/bitbucket/si324/rf-detr-wildfire/bounding_boxes/{experiment_name}/rfdetr_predicted_bb_breakdown"
+    OUTPUT_ROOT = f"/vol/bitbucket/si324/rf-detr-wildfire/bounding_boxes/{experiment_name}/rfdetr_predicted_bb_breakdown"
     
     # Image-level directories
     img_level_dirs = {
-        'TP': os.path.join(output_root, 'image_level', 'TP'),
-        'FP': os.path.join(output_root, 'image_level', 'FP'), 
-        'FN': os.path.join(output_root, 'image_level', 'FN'),
-        'TN': os.path.join(output_root, 'image_level', 'TN')
+        'TP': os.path.join(OUTPUT_ROOT, 'image_level', 'TP'),
+        'FP': os.path.join(OUTPUT_ROOT, 'image_level', 'FP'), 
+        'FN': os.path.join(OUTPUT_ROOT, 'image_level', 'FN'),
+        'TN': os.path.join(OUTPUT_ROOT, 'image_level', 'TN')
     }
     
     # Object-level directories (no TN for object-level)
     obj_level_dirs = {
-        'TP': os.path.join(output_root, 'object_level', 'TP'),
-        'FP': os.path.join(output_root, 'object_level', 'FP'),
-        'FN': os.path.join(output_root, 'object_level', 'FN')
+        'TP': os.path.join(OUTPUT_ROOT, 'object_level', 'TP'),
+        'FP': os.path.join(OUTPUT_ROOT, 'object_level', 'FP'),
+        'FN': os.path.join(OUTPUT_ROOT, 'object_level', 'FN')
     }
     
     # Create all directories
@@ -439,16 +447,22 @@ def generate_rfdetr_prediction_visualizations(experiment_name: str = "rfdetr_smo
         img_pred_boxes = convert_rfdetr_detections_to_yolo_format(img_detections, img_width, img_height)
 
         # IMAGE-LEVEL EVALUATION (using image-level predictions)
-        img_classification = evaluate_image_classification(gt_boxes, img_pred_boxes, img_conf_th, iou_th)
+        img_classification = evaluate_image_classification(
+            gt_boxes, img_pred_boxes, img_width, img_height, img_conf_th, iou_th
+        )
 
         # OBJECT-LEVEL EVALUATION (using object-level predictions at object threshold)
-        obj_classifications = evaluate_object_classifications(gt_boxes, obj_pred_boxes, obj_conf_th, iou_th)
+        obj_classifications = evaluate_object_classifications(
+            gt_boxes, obj_pred_boxes, img_width, img_height, obj_conf_th, iou_th
+        )
         
         # Generate IMAGE-LEVEL visualization 
-        img_output_path = os.path.join(img_level_dirs[img_classification], f"{filename}_img_th{img_conf_th}.jpg")
+        img_output_path = os.path.join(img_level_dirs[img_classification], f"{filename}_img_th{img_conf_th:.2f}.jpg")
         
         # Generate IMAGE-LEVEL object classifications using IMAGE-LEVEL predictions
-        img_level_obj_classifications = evaluate_object_classifications(gt_boxes, img_pred_boxes, img_conf_th, iou_th)
+        img_level_obj_classifications = evaluate_object_classifications(
+            gt_boxes, img_pred_boxes, img_width, img_height, img_conf_th, iou_th
+        )
 
         img_result = draw_predictions_with_classification(
             image_path, gt_boxes, img_pred_boxes, img_output_path,
@@ -530,7 +544,7 @@ def generate_rfdetr_prediction_visualizations(experiment_name: str = "rfdetr_smo
         'detailed_results': convert_numpy_types(stats['detailed_results'])
     }
     
-    stats_file = os.path.join(output_root, f'{split}_rfdetr_prediction_breakdown_stats.json')
+    stats_file = os.path.join(OUTPUT_ROOT, f'{split}_rfdetr_prediction_breakdown_stats.json')
     with open(stats_file, 'w') as f:
         json.dump(summary, f, indent=2)
     
@@ -570,8 +584,8 @@ def generate_rfdetr_prediction_visualizations(experiment_name: str = "rfdetr_smo
     print(f"   📊 All boxes show: Classification: Confidence IoU:Value")
     
     print(f"\n💾 Output Directories:")
-    print(f"   📁 Image-level: {output_root}/image_level/")
-    print(f"   📁 Object-level: {output_root}/object_level/")
+    print(f"   📁 Image-level: {OUTPUT_ROOT}/image_level/")
+    print(f"   📁 Object-level: {OUTPUT_ROOT}/object_level/")
     print(f"📈 Stats saved to: {stats_file}")
 
 def main():

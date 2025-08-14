@@ -12,6 +12,8 @@ from PIL import Image
 import supervision as sv
 from rfdetr import RFDETRBase
 import seaborn as sns
+from datetime import datetime
+
 
 # ============================================================================
 # CONFIGURATION
@@ -213,40 +215,38 @@ def has_spatial_overlap(predictions, ground_truth):
                 return True
     return False
 
-
 def _object_tp_fp_fn_for_image(preds, annotations, iou_th=IOU_THRESHOLD):
-    """Compute object-level TP/FP/FN for a single image """
+    """Compute object-level TP/FP/FN for a single image (baseline-compatible)."""
     gt = np.array(annotations.xyxy)
     pr = np.array(preds.xyxy)
     tp = fp = fn = 0
 
-    if gt.size == 0 and pr.size == 0:
-        return 0, 0, 0
+    # When NO GT, every prediction above conf is a FP
+    if gt.size == 0:
+        return 0, int(len(pr)), 0
 
-    matched = np.zeros(len(gt), dtype=bool) if len(gt) else np.array([], dtype=bool)
+    # Match predictions to GT with 1-1 assignment and count FPs otherwise
+    matched = np.zeros(len(gt), dtype=bool)
 
     for pb in pr:
-        if len(gt):
-            ious = []
-            for gt_box in gt:
-                iou_matrix = box_iou(pb, gt_box)
-                iou_val = iou_matrix[0, 0]  # Extract single IoU value
-                ious.append(iou_val)
-            ious = np.array(ious)
-            if len(ious) > 0:
-                max_iou = np.max(ious)
-                idx = int(np.argmax(ious))
-                if max_iou > iou_th and not matched[idx]:
-                    tp += 1
-                    matched[idx] = True
-                else:
-                    fp += 1
+        ious = []
+        for gt_box in gt:
+            iou_matrix = box_iou(pb, gt_box)
+            iou_val = iou_matrix[0, 0]   # scalar
+            ious.append(iou_val)
+
+        if len(ious) > 0:
+            max_iou = float(np.max(ious))
+            idx = int(np.argmax(ious))
+            if max_iou > iou_th and not matched[idx]:
+                tp += 1
+                matched[idx] = True
             else:
                 fp += 1
+        else:
+            fp += 1
 
-    if len(gt):
-        fn += int((~matched).sum())
-
+    fn += int((~matched).sum())
     return tp, fp, fn
 
 
@@ -427,6 +427,7 @@ def save_results(img_results, obj_results, yolo_baseline, img_best, obj_best):
     evaluation_data = {
         "experiment_info": {
             "experiment_name": EXPERIMENT_NAME,
+            "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
             "iou_threshold": IOU_THRESHOLD, # this eval's IoU
             "yolo_baseline_iou_threshold": yolo_baseline.get("iou_threshold", None),
             "dataset_path": DATASET_PATH
