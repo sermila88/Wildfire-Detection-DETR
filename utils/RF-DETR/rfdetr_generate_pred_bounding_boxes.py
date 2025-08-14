@@ -282,15 +282,28 @@ def draw_predictions_with_classification(image_path: str, gt_boxes: List, pred_b
                 cv2.circle(output_image, (x1i-20, y1i-20), 15, (255, 255, 255), 2)  # White border
                 cv2.putText(output_image, 'FN', (x1i-50, y1i-25), cv2.FONT_HERSHEY_SIMPLEX, 0.7, colors['FN'], 2)
     
-    # Add clear header with better contrast
-    stats_text = f"{evaluation_type.upper()}: {img_classification} | GT: {len(gt_boxes)} | Pred@{conf_th}: {len(valid_preds)}"
-    
-    # Large background box for header
-    (text_w, text_h), _ = cv2.getTextSize(stats_text, cv2.FONT_HERSHEY_SIMPLEX, 0.8, 2)
-    cv2.rectangle(output_image, (5, 5), (text_w + 20, text_h + 30), (0, 0, 0), -1)
-    cv2.rectangle(output_image, (5, 5), (text_w + 20, text_h + 30), (255, 255, 255), 2)
-    cv2.putText(output_image, stats_text, (15, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255), 2)
-    
+    # Header with GT and Pred info
+    mode = "IMG-LEVEL" if str(evaluation_type).lower() == "image" else "OBJ-LEVEL"
+
+    if mode == "IMG-LEVEL":
+        gt_has = len(gt_boxes) > 0
+        pred_has = len(valid_preds) > 0
+        gt_txt = "Fire" if gt_has else "No Fire"
+        pred_txt = "Fire" if pred_has else "No Fire"
+        header = f"{mode} | {img_classification} | GT: {gt_txt} | Pred: {pred_txt} @{conf_th:.2f}"
+    else:
+        # For object-level views, show counts at the threshold
+        header = f"{mode} | {img_classification} | GT count: {len(gt_boxes)} | Pred count @{conf_th:.2f}: {len(valid_preds)}"
+
+    # Draw header with high-contrast panel
+    (text_w, text_h), _ = cv2.getTextSize(header, cv2.FONT_HERSHEY_SIMPLEX, 0.8, 2)
+    panel_x1, panel_y1 = 5, 5
+    panel_x2, panel_y2 = panel_x1 + text_w + 15, panel_y1 + text_h + 20
+    cv2.rectangle(output_image, (panel_x1, panel_y1), (panel_x2, panel_y2), (0, 0, 0), -1)
+    cv2.rectangle(output_image, (panel_x1, panel_y1), (panel_x2, panel_y2), (255, 255, 255), 2)
+    cv2.putText(output_image, header, (panel_x1 + 7, panel_y1 + text_h + 2),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255), 2)
+
     # Add clean legend in bottom corner 
     legend_y_start = img_height - 100
     legend_items = [
