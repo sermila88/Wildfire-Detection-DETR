@@ -18,7 +18,7 @@ from datetime import datetime
 # ============================================================================
 # CONFIGURATION
 # ============================================================================
-EXPERIMENT_NAME = "rfdetr_smoke_detection_v1"
+EXPERIMENT_NAME = "rfdetr_smoke_detection_v1_IoU=0.1"
 PROJECT_ROOT = "/vol/bitbucket/si324/rf-detr-wildfire"
 
 # Dataset paths
@@ -31,9 +31,9 @@ CHECKPOINTS_DIR = f"{EXPERIMENT_DIR}/checkpoints"
 EVAL_RESULTS_DIR = f"{EXPERIMENT_DIR}/eval_results"
 PLOTS_DIR = f"{EXPERIMENT_DIR}/plots"
 
-# Evaluation parameters (PyroNear methodology)
+# Evaluation parameters 
 CONFIDENCE_THRESHOLDS = np.arange(0.1, 0.9, 0.05)
-IOU_THRESHOLD = 0.1  # PyroNear baseline
+IOU_THRESHOLD = 0.1  
 
 # Create output directories
 os.makedirs(EVAL_RESULTS_DIR, exist_ok=True)
@@ -87,6 +87,21 @@ def box_iou(box1: np.ndarray, box2: np.ndarray, eps: float = 1e-7):
     # IoU = inter / (area1 + area2 - inter)
     return inter / ((a2 - a1).prod(1) + (b2 - b1).prod(1)[:, None] - inter + eps)
 
+
+def save_predictions_yolo_format(preds, output_path, img_width, img_height):
+    """Save RF-DETR predictions in YOLO format for debugging"""
+    with open(output_path, 'w') as f:
+        for i, box in enumerate(preds.xyxy):
+            x1, y1, x2, y2 = box
+            # Convert to YOLO format (normalized center x, y, width, height)
+            x_center = ((x1 + x2) / 2) / img_width
+            y_center = ((y1 + y2) / 2) / img_height
+            width = (x2 - x1) / img_width
+            height = (y2 - y1) / img_height
+            conf = preds.confidence[i] if hasattr(preds, 'confidence') and preds.confidence is not None else 1.0
+            # Format: class_id x_center y_center width height confidence
+            f.write(f"0 {x_center:.6f} {y_center:.6f} {width:.6f} {height:.6f} {conf:.6f}\n")
+
 # ============================================================================
 # LOAD YOLO BASELINE FOR COMPARISON
 # ============================================================================
@@ -124,7 +139,7 @@ def load_yolo_baseline():
         print(f"⚠️  YOLO baseline file not found at:\n    {path}")
         return {
             "experiment_name": "yolo_baseline_fallback",
-            "iou_threshold": 0.1,
+            "iou_threshold": IOU_THRESHOLD,
             "image": {
                 "best_threshold": 0.1,
                 "metrics": {"f1_score": 0.0, "precision": 0.0, "recall": 0.0, "accuracy": 0.0},
@@ -216,36 +231,39 @@ def has_spatial_overlap(predictions, ground_truth):
     return False
 
 def _object_tp_fp_fn_for_image(preds, annotations, iou_th=IOU_THRESHOLD):
-    """Compute object-level TP/FP/FN for a single image (baseline-compatible)."""
+    """Compute object-level TP/FP/FN for a single image."""
     gt = np.array(annotations.xyxy)
     pr = np.array(preds.xyxy)
     tp = fp = fn = 0
 
     # When NO GT, every prediction above conf is a FP
     if gt.size == 0:
-        return 0, int(len(pr)), 0
+        return 0, len(pr), 0
 
     # Match predictions to GT with 1-1 assignment and count FPs otherwise
     matched = np.zeros(len(gt), dtype=bool)
 
     for pb in pr:
         ious = []
-        for gt_box in gt:
+        for gt_box in gt: # Check overlap with ground truth boxes
             iou_matrix = box_iou(pb, gt_box)
-            iou_val = iou_matrix[0, 0]   # scalar
+            iou_val = iou_matrix[0, 0] # Extract single IoU value
             ious.append(iou_val)
 
-        if len(ious) > 0:
-            max_iou = float(np.max(ious))
-            idx = int(np.argmax(ious))
-            if max_iou > iou_th and not matched[idx]:
-                tp += 1
-                matched[idx] = True
-            else:
-                fp += 1
+        # Find best matching GT box for this prediction
+        max_iou = float(np.max(ious))
+        idx = int(np.argmax(ious))
+
+        # If IoU is above threshold and not already matched, count as TP
+        if max_iou > iou_th and not matched[idx]:
+            tp += 1
+            matched[idx] = True
+
+        # If IoU is below threshold or already matched, count as FP
         else:
             fp += 1
-
+ 
+    # Count unmatched GT boxes as FN
     fn += int((~matched).sum())
     return tp, fp, fn
 
@@ -259,13 +277,22 @@ def _counts_at_conf(model, dataset, conf):
     img_tp = img_fp = img_fn = img_tn = 0
     obj_tp = obj_fp = obj_fn = 0
 
+    # Create predictions directory in the correct location
+    pred_dir = f"{EXPERIMENT_DIR}/rfdetr_preds_yolo_format/conf_{conf:.2f}"
+    os.makedirs(pred_dir, exist_ok=True)
+
     for path, _, annotations in dataset:
         # ensure PIL RGB; doesn't alter colors, just guarantees channel order
         with Image.open(path) as _img:
             img = _img.convert("RGB")
             preds = model.predict(img, threshold=conf)
 
-        # ---- image-level (PyroNear) ----
+            # Save predictions in YOLO format
+            img_name = os.path.basename(path).replace('.jpg', '').replace('.png', '').replace('.jpeg', '')
+            pred_path = os.path.join(pred_dir, f"{img_name}.txt")
+            save_predictions_yolo_format(preds, pred_path, img.width, img.height)
+
+        # ---- image-level ----
         has_smoke_gt = len(annotations.xyxy) > 0
         has_smoke_pred = len(preds.xyxy) > 0
         spatial_match = False
@@ -469,7 +496,7 @@ def save_results(img_results, obj_results, yolo_baseline, img_best, obj_best):
             "object_level": obj_results
         }
     }
-        # NEW: human-friendly per-level summary (easy to copy into thesis)
+    # Summary results text
     eval_summary_path = f"{EVAL_RESULTS_DIR}/evaluation_summary.txt"
     with open(eval_summary_path, "w") as f:
         f.write(f"Experiment: {EXPERIMENT_NAME}\n")

@@ -70,10 +70,13 @@ def evaluate_predictions(pred_folder, gt_folder, conf_th=0.1, iou_th=0.1, cat=No
                         obj_tp += 1
                         gt_matches[best_match_idx] = True
                     else:
+                        # Either IoU too low OR GT already matched
                         obj_fp += 1
                 else:
+                     # No GT boxes in image, so any prediction is wrong
                     obj_fp += 1
 
+        # After processing all predictions, count unmatched GT boxes
         if gt_boxes:
             obj_fn += len(gt_boxes) - np.sum(gt_matches)
 

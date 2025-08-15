@@ -1,4 +1,4 @@
-Experiment: rfdetr_smoke_detection_v1
+Experiment: rfdetr_smoke_detection_v1_IoU=0.1
 
 RF-DETR vs YOLO Baseline 
 ================================================
