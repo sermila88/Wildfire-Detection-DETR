@@ -13,6 +13,7 @@ from rfdetr import RFDETRBase
 import seaborn as sns
 from datetime import datetime
 import argparse
+import time
 
 
 # ============================================================================
@@ -42,9 +43,30 @@ CHECKPOINTS_DIR = f"{EXPERIMENT_DIR}/checkpoints"
 EVAL_RESULTS_DIR = f"{EXPERIMENT_DIR}/eval_results"
 PLOTS_DIR = f"{EXPERIMENT_DIR}/plots"
 
+# Prediction saving policy (to avoid disk floods)
+SAVE_PREDS = False             # set True to write YOLO txts
+SAVE_PREDS_MODE = "best_only"  # "best_only" or "none"
+MIN_CACHE_CONF = 0.01          # minimum conf to cache predictions once
+
+def save_predictions_yolo_from_arrays(boxes, confidences, output_path, img_width, img_height):
+    """Save predictions (already arrays) in YOLO format."""
+    with open(output_path, 'w') as f:
+        for i, box in enumerate(boxes):
+            x1, y1, x2, y2 = box
+            x_center = ((x1 + x2) / 2) / img_width
+            y_center = ((y1 + y2) / 2) / img_height
+            width = (x2 - x1) / img_width
+            height = (y2 - y1) / img_height
+            conf = float(confidences[i]) if confidences is not None and len(confidences) > i else 1.0
+            f.write(f"0 {x_center:.6f} {y_center:.6f} {width:.6f} {height:.6f} {conf:.6f}\n")
+
+
 # Evaluation parameters 
 CONFIDENCE_THRESHOLDS = np.arange(0.1, 0.9, 0.05)
 IOU_THRESHOLD = 0.01  
+
+assert MIN_CACHE_CONF <= float(np.min(CONFIDENCE_THRESHOLDS)), \
+    "MIN_CACHE_CONF must be <= smallest threshold in CONFIDENCE_THRESHOLDS."
 
 # Create output directories
 os.makedirs(EVAL_RESULTS_DIR, exist_ok=True)
@@ -98,20 +120,6 @@ def box_iou(box1: np.ndarray, box2: np.ndarray, eps: float = 1e-7):
     # IoU = inter / (area1 + area2 - inter)
     return inter / ((a2 - a1).prod(1) + (b2 - b1).prod(1)[:, None] - inter + eps)
 
-
-def save_predictions_yolo_format(preds, output_path, img_width, img_height):
-    """Save RF-DETR predictions in YOLO format for debugging"""
-    with open(output_path, 'w') as f:
-        for i, box in enumerate(preds.xyxy):
-            x1, y1, x2, y2 = box
-            # Convert to YOLO format (normalized center x, y, width, height)
-            x_center = ((x1 + x2) / 2) / img_width
-            y_center = ((y1 + y2) / 2) / img_height
-            width = (x2 - x1) / img_width
-            height = (y2 - y1) / img_height
-            conf = preds.confidence[i] if hasattr(preds, 'confidence') and preds.confidence is not None else 1.0
-            # Format: class_id x_center y_center width height confidence
-            f.write(f"0 {x_center:.6f} {y_center:.6f} {width:.6f} {height:.6f} {conf:.6f}\n")
 
 # ============================================================================
 # LOAD YOLO BASELINE FOR COMPARISON
@@ -185,6 +193,35 @@ def load_model():
         model = RFDETRBase(pretrain_weights=checkpoint_path, num_classes=1)
     
     return model
+
+def cache_predictions(model, dataset, min_conf=MIN_CACHE_CONF):
+    """Run inference ONCE with very low threshold and cache results."""
+    print(f"🧠 Caching predictions once at min_conf={min_conf} for {len(dataset)} images...")
+    cached = []
+    for path, _, annotations in tqdm(dataset, desc="Caching", leave=False):
+        with Image.open(path) as img:
+            img_rgb = img.convert("RGB")
+            img_width, img_height = img.size
+            preds = model.predict(img_rgb, threshold=min_conf)
+
+        # safety: confidences must be present and aligned
+        assert hasattr(preds, 'confidence') and preds.confidence is not None \
+               and len(preds.confidence) == len(preds.xyxy), \
+               f"Missing/mismatched confidences for {os.path.basename(path)}"
+
+        boxes = np.array(preds.xyxy, dtype=float)
+        confs = np.array(preds.confidence, dtype=float)
+
+        cached.append({
+            "path": path,
+            "annotations": annotations,
+            "boxes": boxes,                 # shape (N,4) or (0,4)
+            "confidences": confs,           # shape (N,)
+            "img_width": img_width,
+            "img_height": img_height,
+        })
+    return cached
+
 
 # ============================================================================
 # DATASET LOADING
@@ -286,62 +323,81 @@ def _object_tp_fp_fn_for_image(preds, annotations, iou_th=IOU_THRESHOLD):
     return tp, fp, fn
 
 
-def _counts_at_conf(model, dataset, conf):
+def _counts_at_conf_cached(cached_predictions, conf, iou_th=IOU_THRESHOLD):
     """
-    One sweep over the dataset at a given confidence:
+    One sweep over the cached predictions at a given confidence:
       - returns image-level TP/FP/FN/TN
       - returns object-level TP/FP/FN
     """
     img_tp = img_fp = img_fn = img_tn = 0
     obj_tp = obj_fp = obj_fn = 0
 
-    # Create predictions directory in the correct location
-    pred_dir = f"{EXPERIMENT_DIR}/rfdetr_preds_yolo_format/conf_{conf:.2f}"
-    os.makedirs(pred_dir, exist_ok=True)
+    for entry in cached_predictions:
+        boxes_all = entry["boxes"]
+        confs_all = entry["confidences"]
+        gt = np.array(entry["annotations"].xyxy)
 
-    for path, _, annotations in dataset:
-        # ensure PIL RGB; doesn't alter colors, just guarantees channel order
-        with Image.open(path) as _img:
-            img = _img.convert("RGB")
-            preds = model.predict(img, threshold=conf)
-
-            # Save predictions in YOLO format
-            img_name = os.path.basename(path).replace('.jpg', '').replace('.png', '').replace('.jpeg', '')
-            pred_path = os.path.join(pred_dir, f"{img_name}.txt")
-            save_predictions_yolo_format(preds, pred_path, img.width, img.height)
+        # filter predictions by conf
+        if boxes_all.size == 0:
+            boxes = np.empty((0, 4), dtype=float)
+            confs = np.empty((0,), dtype=float)
+        else:
+            mask = confs_all >= conf
+            boxes = boxes_all[mask]
+            confs = confs_all[mask]
 
         # ---- image-level ----
-        has_smoke_gt = len(annotations.xyxy) > 0
-        has_smoke_pred = len(preds.xyxy) > 0
+        has_gt = gt.size > 0
+        has_pred = boxes.shape[0] > 0
         spatial_match = False
-        if has_smoke_gt and has_smoke_pred:
-            spatial_match = has_spatial_overlap(preds, annotations)
+        if has_gt and has_pred:
+            # Any pred overlaps any GT above IoU?
+            for pb in boxes:
+                # compute IoUs vs each GT
+                ious = [box_iou(pb, g)[0, 0] for g in gt]
+                if ious and max(ious) > iou_th:
+                    spatial_match = True
+                    break
 
-        if has_smoke_gt:
+        if has_gt:
             if spatial_match: img_tp += 1
             else:             img_fn += 1
         else:
-            if has_smoke_pred: img_fp += 1
-            else:              img_tn += 1
+            if has_pred: img_fp += 1
+            else:        img_tn += 1
 
-        # ---- object-level  ----
-        tpo, fpo, fno = _object_tp_fp_fn_for_image(preds, annotations, IOU_THRESHOLD)
-        obj_tp += tpo; obj_fp += fpo; obj_fn += fno
+        # ---- object-level ----
+        if gt.size == 0:
+            obj_fp += boxes.shape[0]
+        else:
+            matched = np.zeros(len(gt), dtype=bool)
+            for pb in boxes:
+                ious = [box_iou(pb, g)[0, 0] for g in gt]
+                if ious:
+                    idx = int(np.argmax(ious))
+                    max_iou = float(np.max(ious))
+                    if max_iou > iou_th and not matched[idx]:
+                        obj_tp += 1
+                        matched[idx] = True
+                    else:
+                        obj_fp += 1
+            obj_fn += int((~matched).sum())
 
     return (img_tp, img_fp, img_fn, img_tn), (obj_tp, obj_fp, obj_fn)
 
 
-def evaluate_model_both_levels(model, dataset):
+def evaluate_model_both_levels(cached_predictions):
     """
-    Run image-level and object-level eval in parallel across thresholds.
+    Run image-level and object-level eval in parallel across thresholds
+    using cached predictions (no re-inference).
     Returns (img_results, obj_results) lists with metrics per threshold.
     """
-    print(f"\n🔥 Running evaluation across {len(CONFIDENCE_THRESHOLDS)} thresholds (image+object together)...")
+    print(f"\n🔥 Running evaluation across {len(CONFIDENCE_THRESHOLDS)} thresholds (image+object together, cached)...")
     img_results, obj_results = [], []
+    total_images = len(cached_predictions)
 
     for conf in tqdm(CONFIDENCE_THRESHOLDS, desc="Evaluating"):
-        (img_tp, img_fp, img_fn, img_tn), (obj_tp, obj_fp, obj_fn) = _counts_at_conf(model, dataset, conf)
-        total_images = len(dataset)
+        (img_tp, img_fp, img_fn, img_tn), (obj_tp, obj_fp, obj_fn) = _counts_at_conf_cached(cached_predictions, conf)
 
         # image-level metrics
         img_prec = img_tp / (img_tp + img_fp) if (img_tp + img_fp) > 0 else 0.0
@@ -641,11 +697,48 @@ def main():
     dataset = load_dataset()
     
     # Run evaluation (both levels together)
-    img_results, obj_results = evaluate_model_both_levels(model, dataset)
+    cached = cache_predictions(model, dataset, min_conf=MIN_CACHE_CONF)
+    img_results, obj_results = evaluate_model_both_levels(cached)
 
     # Plots + get best rows
     img_plot, img_best = create_image_metrics_plot(img_results)
     obj_plot, obj_best = create_object_metrics_plot(obj_results)
+
+    # Save predictions at best thresholds 
+    if SAVE_PREDS and SAVE_PREDS_MODE == "best_only":
+        best_root = f"{EXPERIMENT_DIR}/rfdetr_preds_yolo_format"
+        img_dir = os.path.join(best_root, f"image_best_conf_{img_best['confidence_threshold']:.2f}")
+        obj_dir = os.path.join(best_root, f"object_best_conf_{obj_best['confidence_threshold']:.2f}")
+        os.makedirs(img_dir, exist_ok=True)
+        os.makedirs(obj_dir, exist_ok=True)
+
+        best_img_conf = img_best['confidence_threshold']
+        best_obj_conf = obj_best['confidence_threshold']
+
+        print(f"📝 Saving YOLO txts only at best thresholds: IMG={best_img_conf:.2f}, OBJ={best_obj_conf:.2f}")
+        for entry in cached:
+            img_name = os.path.basename(entry["path"]).replace('.jpg','').replace('.jpeg','').replace('.png','')
+            boxes_all = entry["boxes"]; confs_all = entry["confidences"]
+
+            # image-best
+            mask_img = confs_all >= best_img_conf
+            boxes_img = boxes_all[mask_img] if boxes_all.size else np.empty((0,4))
+            confs_img = confs_all[mask_img] if boxes_all.size else np.empty((0,))
+            save_predictions_yolo_from_arrays(
+                boxes_img, confs_img,
+                os.path.join(img_dir, f"{img_name}.txt"),
+                entry["img_width"], entry["img_height"]
+            )
+
+            # object-best
+            mask_obj = confs_all >= best_obj_conf
+            boxes_obj = boxes_all[mask_obj] if boxes_all.size else np.empty((0,4))
+            confs_obj = confs_all[mask_obj] if boxes_all.size else np.empty((0,))
+            save_predictions_yolo_from_arrays(
+                boxes_obj, confs_obj,
+                os.path.join(obj_dir, f"{img_name}.txt"),
+                entry["img_width"], entry["img_height"]
+            )
 
     # Confusion matrices (from best rows, no extra inference)
     img_cm_path = create_image_confusion_matrix_from_row(img_best)

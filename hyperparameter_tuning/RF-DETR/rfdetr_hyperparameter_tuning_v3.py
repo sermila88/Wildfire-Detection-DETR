@@ -25,6 +25,14 @@ import re
 import logging
 from scipy.ndimage import uniform_filter1d 
 
+if torch.cuda.is_available():
+    gpu_name = torch.cuda.get_device_name(0)
+    gpu_id = torch.cuda.current_device()
+    print(f"🚀 Using GPU {gpu_id}: {gpu_name}")
+else:
+    print("⚠️ No GPU detected, falling back to CPU")
+
+
 # ============================================================================
 # CONFIGURATION
 # ============================================================================
@@ -40,7 +48,7 @@ OUTPUT_DIR = f"{PROJECT_ROOT}/outputs/{EXPERIMENT_NAME}"
 
 # Evaluation parameters
 IOU_THRESHOLD = 0.01  
-CONFIDENCE_THRESHOLDS = np.arange(0.1, 0.9, 0.1)  # For threshold sweep
+CONFIDENCE_THRESHOLDS = np.arange(0.1, 0.9, 0.05)  # For threshold sweep
 
 # Training configuration
 N_TRIALS = 10  
@@ -86,12 +94,20 @@ def cache_predictions(model, val_dataset, min_conf=0.01):
         with Image.open(path) as img:
             img_rgb = img.convert("RGB")
             preds = model.predict(img_rgb, threshold=min_conf)
+
+            # --- SAFETY GUARD: must have confidences and lengths must match ---
+            assert hasattr(preds, 'confidence') and preds.confidence is not None \
+                and len(preds.confidence) == len(preds.xyxy), \
+                f"Missing/mismatched confidences for {os.path.basename(path)}; cannot sweep thresholds safely."
+
+            boxes = np.array(preds.xyxy, dtype=float)
+            confidences = np.array(preds.confidence, dtype=float)
             
         all_predictions.append({
             'path': path,
             'annotations': annotations,
-            'boxes': preds.xyxy,
-            'confidences': preds.confidence if hasattr(preds, 'confidence') else np.ones(len(preds.xyxy))
+            'boxes': boxes,
+            'confidences': confidences
         })
     
     inference_time = time.time() - start_time
@@ -106,9 +122,13 @@ def evaluate_at_threshold(cached_predictions, confidence_threshold):
     obj_tp = obj_fp = obj_fn = 0
     
     for pred_data in cached_predictions:
-        # Filter by confidence - no model inference needed!
-        mask = pred_data['confidences'] >= confidence_threshold
-        filtered_boxes = pred_data['boxes'][mask] if len(pred_data['boxes']) > 0 else np.array([])
+        # Filter by confidence 
+        boxes_all = pred_data['boxes']
+        if boxes_all.size == 0:
+            filtered_boxes = np.empty((0, 4), dtype=float)
+        else:
+            filtered_boxes = boxes_all[pred_data['confidences'] >= confidence_threshold]
+
         
         # Object-level evaluation
         gt = np.array(pred_data['annotations'].xyxy)
@@ -333,13 +353,13 @@ def objective(trial):
     # Hyperparameters for wildfire smoke detection
     hp = {
         'epochs': trial.suggest_int('epochs', 30, 50, step=10),
-        'batch_size': trial.suggest_categorical('batch_size', [2, 4, 8]),
-        'lr': trial.suggest_float('lr', 5e-5, 2e-4, log=True),
-        'lr_encoder': trial.suggest_float('lr_encoder', 5e-6, 5e-5, log=True),
+        'batch_size': trial.suggest_categorical('batch_size', [2, 4, 8, 16]),
+        'lr': trial.suggest_float('lr', 5e-5, 5e-4, log=True),
+        'lr_encoder': trial.suggest_float('lr_encoder', 5e-6, 1e-4, log=True),
         'resolution': trial.suggest_categorical('resolution', [896, 1120, 1232]),
         'weight_decay': trial.suggest_float('weight_decay', 1e-5, 1e-3, log=True),
-        'gradient_checkpointing': True,
-        'use_ema': True,
+        'gradient_checkpointing': trial.suggest_categorical('gradient_checkpointing', [True, False]),
+        'use_ema': trial.suggest_categorical('use_ema', [True, False]),
     }
     
     # Calculate gradient accumulation
@@ -399,7 +419,7 @@ def objective(trial):
             verbose=False,
             plots=False,
             tensorboard=False,
-            wandb=False
+            wandb=True
         )
         
         train_time = time.time() - train_start
@@ -484,6 +504,14 @@ def objective(trial):
         
         logging.info(f"Trial {trial.number}: F1={best_result['f1_score']:.4f} @ conf={best_result['confidence']:.1f}")
         
+        with open(os.path.join(trial_dir, "gpu_info.json"), "w") as f:
+            json.dump({
+                "gpu_id": gpu_id,
+                "gpu_name": gpu_name,
+                "cuda_version": torch.version.cuda,
+                "torch_version": torch.__version__
+            }, f, indent=2)
+
         return best_result['f1_score']  # RETURN BEST F1 THIS MODEL CAN ACHIEVE
         
     except Exception as e:
