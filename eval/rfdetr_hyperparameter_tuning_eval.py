@@ -1,6 +1,5 @@
 """
-RF-DETR Evaluation Script for Wildfire Smoke Detection
-Uses PyroNear methodology for baseline comparison
+RF-DETR Evaluation Script for Hyperparameter Tuning
 """
 
 import os
@@ -13,12 +12,24 @@ import supervision as sv
 from rfdetr import RFDETRBase
 import seaborn as sns
 from datetime import datetime
+import argparse
 
 
 # ============================================================================
 # CONFIGURATION
 # ============================================================================
-EXPERIMENT_NAME = "rfdetr_smoke_detection_v1_IoU=0.01"
+
+parser = argparse.ArgumentParser(description='Evaluate RF-DETR checkpoint')
+parser.add_argument('--checkpoint', type=str, required=True, 
+                    help='Path to checkpoint file')
+parser.add_argument('--resolution', type=int, default=None,
+                    help='Model resolution (560, 672, 896, 1120, 1232)')
+parser.add_argument('--experiment_name', type=str, required=True,
+                    help='Name for this evaluation experiment')
+args = parser.parse_args()
+
+EXPERIMENT_NAME = args.experiment_name
+
 PROJECT_ROOT = "/vol/bitbucket/si324/rf-detr-wildfire"
 
 # Dataset paths
@@ -158,14 +169,21 @@ def load_yolo_baseline():
 # ============================================================================
 def load_model():
     """Load RF-DETR model from checkpoint"""
-    checkpoint_path = f"{CHECKPOINTS_DIR}/checkpoint_best_ema.pth"
+    checkpoint_path = args.checkpoint  # Use command-line argument
     
     if not os.path.exists(checkpoint_path):
         print(f"❌ Checkpoint not found: {checkpoint_path}")
         exit(1)
     
     print(f"✅ Loading RF-DETR from: {checkpoint_path}")
-    model = RFDETRBase(pretrain_weights=checkpoint_path, num_classes=1)
+    
+    # Load with resolution if specified
+    if args.resolution:
+        print(f"📐 Using resolution: {args.resolution}")
+        model = RFDETRBase(pretrain_weights=checkpoint_path, num_classes=1, resolution=args.resolution)
+    else:
+        model = RFDETRBase(pretrain_weights=checkpoint_path, num_classes=1)
+    
     return model
 
 # ============================================================================

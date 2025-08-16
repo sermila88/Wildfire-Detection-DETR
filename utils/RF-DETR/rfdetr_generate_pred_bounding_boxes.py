@@ -18,7 +18,7 @@ from tqdm import tqdm
 # CONFIGURATION - MUST MATCH YOUR EVAL SCRIPT
 # ============================================================================
 PROJECT_ROOT = "/vol/bitbucket/si324/rf-detr-wildfire"
-EXPERIMENT_NAME = "rfdetr_smoke_detection_v1_IoU=0.1"  # Update to match eval
+EXPERIMENT_NAME = "rfdetr_smoke_detection_v1_IoU=0.01"  # Update to match eval
 
 # Dataset paths
 DATASET_PATH = f"{PROJECT_ROOT}/data/pyro25img/images/test"
