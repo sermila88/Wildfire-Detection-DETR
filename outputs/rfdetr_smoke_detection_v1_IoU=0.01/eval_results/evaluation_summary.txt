@@ -1,0 +1,28 @@
+Experiment: rfdetr_smoke_detection_v1_IoU=0.01
+==================================================
+
+IoU threshold (this eval): 0.01
+YOLO baseline IoU: 0.01
+IMAGE LEVEL PRIMARY METRICS:
+Precision: 0.9238
+Recall: 0.8658
+F1 Score: 0.8939
+Accuracy: 0.8228
+
+IMAGE LEVEL CONFUSION MATRIX:
+TP: 400
+TN: 41
+FP: 33
+FN: 62
+
+OBJECT LEVEL PRIMARY METRICS:
+Precision: 0.8621
+Recall: 0.7577
+F1 Score: 0.8066
+Accuracy: N/A
+
+OBJECT LEVEL CONFUSION MATRIX:
+TP: 369
+TN: N/A
+FP: 59
+FN: 118

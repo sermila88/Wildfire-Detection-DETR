@@ -1,0 +1,22 @@
+Experiment: rtdetr_smoke_detection_v1_IoU=0.01
+
+RT-DETR vs YOLO Baseline 
+================================================
+
+IoU threshold (this eval): 0.01
+YOLO baseline IoU: 0.01
+YOLO Baseline (Image Level):
+  F1: 0.8422  Precision: 0.9075  Recall: 0.7857  Accuracy: 0.7463
+
+RT-DETR (Image Level):
+  F1: 0.8896  Precision: 0.8729  Recall: 0.9069  Accuracy: 0.8060  @conf=0.10
+
+YOLO Baseline (Object Level):
+  F1: 0.7255  Precision: 0.7833  Recall: 0.6756
+
+RT-DETR (Object Level):
+  F1: 0.7459  Precision: 0.7877  Recall: 0.7084  @conf=0.40
+
+Improvements on YOLO Baseline:
+  Image F1: +5.6%
+  Object F1: +2.8%
