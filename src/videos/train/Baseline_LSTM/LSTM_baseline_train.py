@@ -148,9 +148,10 @@ class FireSeriesDataset(Dataset):
         # Stack into tensor shape (T, C, H, W)
         sequence_tensor = torch.stack(tensors)
 
-        # Label extracted from parent folder name (assumes numeric)
-        label = int(os.path.basename(os.path.dirname(seq_path)))
-        return sequence_tensor, label
+        # Ground truth: sequences with GT labels = fire (1), without = no fire (0)
+        labels_dir = os.path.join(seq_path, 'labels')
+        has_detections = os.path.exists(labels_dir) and len(os.listdir(labels_dir)) > 0
+        label = 1 if has_detections else 0
 
 
 class FireDataModule(pl.LightningDataModule):

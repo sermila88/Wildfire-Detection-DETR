@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Draw ground truth bounding boxes from YOLO labels on wildfire dataset images.
-Only processes images with labels and organizes by class.
+Separates images into fire and no fire categories.
 """
 
 import os
@@ -143,7 +143,7 @@ def process_image(args):
 def main():
     parser = argparse.ArgumentParser(description='Draw GT bounding boxes on wildfire dataset')
     parser.add_argument('--input_dir', type=str, 
-                       default='/vol/bitbucket/si324/rf-detr-wildfire/data/pyrodata/data',
+                       default='/vol/bitbucket/si324/rf-detr-wildfire/src/videos/data'
                        help='Input dataset directory')
     parser.add_argument('--workers', type=int, default=multiprocessing.cpu_count(),
                        help='Number of parallel workers')

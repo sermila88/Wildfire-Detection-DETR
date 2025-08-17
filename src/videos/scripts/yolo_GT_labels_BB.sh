@@ -14,12 +14,12 @@ source /vol/bitbucket/${USER}/rf-detr-wildfire/.venv/bin/activate
 source /vol/cuda/12.0.0/setup.sh
 /usr/bin/nvidia-smi
 
-mkdir -p /vol/bitbucket/si324/rf-detr-wildfire/src/videos/bounding_boxes/only_labeled_GT_BB
-mkdir -p /vol/bitbucket/si324/rf-detr-wildfire/src/videos/bounding_boxes/only_labeled_GT_BB/logs
+mkdir -p /vol/bitbucket/si324/rf-detr-wildfire/src/videos/bounding_boxes/fire_no_fire_GT_BB
+mkdir -p /vol/bitbucket/si324/rf-detr-wildfire/src/videos/bounding_boxes/fire_no_fire_GT_BB/logs
 
 # Run the script with parallel processing
 echo "Starting bounding box drawing with $SLURM_CPUS_PER_TASK workers..."
-python src/videos/utils/yolo_only_labeled_GT_BB.py \
+python src/videos/utils/yolo_fire_no_fire_GT_BB.py \
     --input_dir /vol/bitbucket/si324/rf-detr-wildfire/data/pyrodata/data \
     --workers $SLURM_CPUS_PER_TASK \
     --splits train val test
