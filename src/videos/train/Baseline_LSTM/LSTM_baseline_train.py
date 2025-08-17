@@ -112,7 +112,9 @@ class FireSeriesDataset(Dataset):
         # Read all label files to compute median bounding box
         labels = []
         for img_path in image_files:
-            label_path = img_path.replace("images", "labels").replace(".jpg", ".txt")
+            img_name = os.path.basename(img_path)
+            label_name = img_name.replace(".jpg", ".txt")
+            label_path = os.path.join(seq_path, "labels", label_name)
             with open(label_path, "r") as lf:
                 line = lf.readline().strip().split()[1:5]
             labels.append(np.array(line, dtype=float))
