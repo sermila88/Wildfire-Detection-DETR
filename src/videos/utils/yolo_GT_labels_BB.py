@@ -15,13 +15,13 @@ import multiprocessing
 
 # Configuration
 COLORS = {
-    0: (0, 0, 255),    # Red for wildfire smoke
-    1: (255, 0, 0)     # Blue for no fire
+    "wildfire smoke": (0, 0, 255)   # Red for wildfire smoke
 }
 LABELS = {
     0: "wildfire smoke",
-    1: "no fire"
+    1: "wildfire smoke"
 }
+
 BOX_THICKNESS = 2
 FONT = cv2.FONT_HERSHEY_SIMPLEX
 FONT_SCALE = 0.6
@@ -68,8 +68,8 @@ def process_image(args):
                 x1, y1, x2, y2 = yolo_to_xyxy(x_center, y_center, width, height, w, h)
                 
                 # Get color and label
-                color = COLORS.get(class_id, (0, 255, 0))  # Green for unknown classes
-                label = LABELS.get(class_id, f"class_{class_id}")
+                label = LABELS.get(class_id, "wildfire smoke")
+                color = COLORS[label]
                 
                 # Draw bounding box
                 cv2.rectangle(img, (x1, y1), (x2, y2), color, BOX_THICKNESS)

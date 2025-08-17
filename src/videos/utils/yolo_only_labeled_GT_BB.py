@@ -13,19 +13,20 @@ import argparse
 from concurrent.futures import ProcessPoolExecutor
 import multiprocessing
 
-# Configuration
 COLORS = {
     0: (0, 0, 255),    # Red for wildfire smoke
-    1: (255, 0, 0)     # Blue for no fire
+    1: (0, 0, 255)     # Also red (class 1 treated as wildfire smoke)
 }
 LABELS = {
     0: "wildfire smoke",
-    1: "no fire"
+    1: "wildfire smoke"
 }
 CLASS_DIRS = {
     0: "wildfire_smoke",
-    1: "no_fire"
+    1: "wildfire_smoke",
+    None: "no_fire"     # Unlabeled images go here
 }
+
 BOX_THICKNESS = 2
 FONT = cv2.FONT_HERSHEY_SIMPLEX
 FONT_SCALE = 0.6
@@ -71,19 +72,25 @@ def process_image(args):
     """Process a single image with its labels."""
     img_path, label_path, split, scene_name = args
     
-    # Check if label exists and has content
+    # Determine dominant class (0/1 -> wildfire_smoke, None -> no_fire)
     dominant_class = get_dominant_class(label_path)
-    if dominant_class is None:
-        # Skip images without labels
-        return None
-    
+
     # Read image
     img = cv2.imread(str(img_path))
     if img is None:
         print(f"Warning: Could not read {img_path}")
         return None
-    
+
     h, w = img.shape[:2]
+
+    # If unlabeled, save unchanged under "no_fire" and return
+    if dominant_class is None:
+        class_dir = CLASS_DIRS[None]
+        output_base = Path('/vol/bitbucket/si324/rf-detr-wildfire/src/videos/bounding_boxes/only_labeled_GT_BB')
+        output_path = output_base / split / class_dir / scene_name / img_path.name
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        cv2.imwrite(str(output_path), img)
+        return (split, class_dir)
     
     # Read labels
     with open(label_path, 'r') as f:
@@ -171,11 +178,11 @@ def main():
                 img_name = img_path.stem
                 label_path = scene_dir / 'labels' / f'{img_name}.txt'
                 
-                # Only add if label exists
-                if label_path.exists():
-                    tasks.append((img_path, label_path, split, scene_name))
+                # Add all images; unlabeled ones will be saved under "no_fire"
+                tasks.append((img_path, label_path, split, scene_name))
+
     
-    print(f"\nTotal images with labels to process: {len(tasks)}")
+    print(f"\nTotal images to process: {len(tasks)}")
     
     # Process images in parallel
     with ProcessPoolExecutor(max_workers=args.workers) as executor:
