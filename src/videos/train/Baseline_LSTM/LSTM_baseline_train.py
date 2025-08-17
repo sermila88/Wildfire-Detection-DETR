@@ -1,5 +1,15 @@
 """
-ResNet50 + LSTM Baseline Training Script for Wildfire Smoke Detection 
+    ResNet50 + LSTM Baseline Training Script for Wildfire Smoke Detection 
+
+    - Loads sequential image data from folders (with YOLO-format bounding box labels).
+    - Crops frames around the median bounding box, resizes, normalizes, and applies transforms.
+    - Uses a pretrained ResNet50 (frozen) as a frame-level feature extractor.
+    - Feeds extracted features into an LSTM to model temporal dependencies.
+    - Outputs binary classification (fire vs. no fire) using a linear layer.
+    - Tracks accuracy, precision, recall with torchmetrics.
+    - Implements a Lightning DataModule for train/val splits.
+    - Saves best checkpoints (based on validation accuracy).
+    - Logs metrics and training progress to Weights & Biases (wandb).
 """
 
 import os
