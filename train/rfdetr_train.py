@@ -1,3 +1,7 @@
+"""
+RF-DETR Training Script for Wildfire Smoke Detection from Roboflow 
+"""
+
 from rfdetr.detr import RFDETRBase
 import torch
 import os

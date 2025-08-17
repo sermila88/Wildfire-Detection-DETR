@@ -25,6 +25,8 @@ import re
 import logging
 from scipy.ndimage import uniform_filter1d 
 
+os.environ['PYTORCH_CUDA_ALLOC_CONF'] = 'expandable_segments:True'
+
 if torch.cuda.is_available():
     gpu_name = torch.cuda.get_device_name(0)
     gpu_id = torch.cuda.current_device()
@@ -36,7 +38,7 @@ else:
 # ============================================================================
 # CONFIGURATION
 # ============================================================================
-EXPERIMENT_NAME = "rf_detr_hyperparameter_tuning_v3"
+EXPERIMENT_NAME = "rf_detr_hyperparameter_tuning_v3.1"
 PROJECT_ROOT = "/vol/bitbucket/si324/rf-detr-wildfire"
 DATASET_DIR = f"{PROJECT_ROOT}/data/pyro25img/images"
 
@@ -352,7 +354,7 @@ def objective(trial):
     
     # Hyperparameters for wildfire smoke detection
     hp = {
-        'epochs': trial.suggest_int('epochs', 30, 50, step=10),
+        'epochs': trial.suggest_int('epochs', 20, 40, step=10),
         'batch_size': trial.suggest_categorical('batch_size', [2, 4, 8, 16]),
         'lr': trial.suggest_float('lr', 5e-5, 5e-4, log=True),
         'lr_encoder': trial.suggest_float('lr_encoder', 5e-6, 1e-4, log=True),
@@ -491,7 +493,7 @@ def objective(trial):
                 f.write(f"  Min loss: {min(training_metrics['train_loss']):.4f}\n")
             
             f.write(f"\nOBJECT-LEVEL RESULTS (Optimization Target):\n")
-            f.write(f"  Best F1 Score: {best_result['f1_score']:.4f} ← OPTIMIZING THIS\n")
+            f.write(f"  Best F1 Score: {best_result['f1_score']:.4f} \n")
             f.write(f"  Best Confidence: {best_result['confidence']:.1f}\n")
             f.write(f"  Precision: {best_result['precision']:.4f}\n")
             f.write(f"  Recall: {best_result['recall']:.4f}\n")
@@ -524,8 +526,12 @@ def objective(trial):
             import traceback
             f.write(traceback.format_exc())
         
-        torch.cuda.empty_cache()
-        gc.collect()
+        # CLEANUP 
+        if torch.distributed.is_initialized():
+            torch.distributed.destroy_process_group()
+        
+        torch.cuda.empty_cache()  
+        gc.collect()              
         
         raise optuna.TrialPruned()
 

@@ -4,9 +4,8 @@
 #SBATCH --error=outputs/rtdetr_official_hyperparameter_tuning_v1/logs/rt_detr_hyperparameter_tuning_%j.err
 #SBATCH --gres=gpu:1
 #SBATCH --partition=gpgpu,a16gpu,gpgpuB
-#SBATCH --mem=40G
-#SBATCH --time=96:00:00
-#SBATCH --cpus-per-task=8
+#SBATCH --mem=16G
+
 
 echo "🔥 RT-DETR Hyperparameter Tuning (Official Implementation)"
 echo "🕐 Job started at: $(date)"

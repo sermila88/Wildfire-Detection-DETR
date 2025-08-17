@@ -1,3 +1,8 @@
+"""
+YOLO Training Script for Wildfire Smoke Detection from Ultralytics
+Pyronear baseline 
+"""
+
 import argparse
 from ultralytics import YOLO
 import wandb
