@@ -1,7 +1,7 @@
 """
     ResNet50 + LSTM Baseline Training Script for Wildfire Smoke Detection 
 
-    - Loads sequential image data from folders (with YOLO-format bounding box labels).
+    - Loads image data from folders (with YOLO-format bounding box labels).
     - Crops frames around the median bounding box, resizes, normalizes, and applies transforms.
     - Uses a pretrained ResNet50 (frozen) as a frame-level feature extractor.
     - Feeds extracted features into an LSTM to model temporal dependencies.
@@ -112,9 +112,7 @@ class FireSeriesDataset(Dataset):
         # Read all label files to compute median bounding box
         labels = []
         for img_path in image_files:
-            img_name = os.path.basename(img_path)
-            label_name = img_name.replace(".jpg", ".txt")
-            label_path = os.path.join(seq_path, "labels", label_name)
+            label_path = img_path.replace("images", "labels").replace(".jpg", ".txt")
             with open(label_path, "r") as lf:
                 line = lf.readline().strip().split()[1:5]
             labels.append(np.array(line, dtype=float))
@@ -148,10 +146,9 @@ class FireSeriesDataset(Dataset):
         # Stack into tensor shape (T, C, H, W)
         sequence_tensor = torch.stack(tensors)
 
-        # Ground truth: sequences with GT labels = fire (1), without = no fire (0)
-        labels_dir = os.path.join(seq_path, 'labels')
-        has_detections = os.path.exists(labels_dir) and len(os.listdir(labels_dir)) > 0
-        label = 1 if has_detections else 0
+        # Label extracted from parent folder name (assumes numeric)
+        label = int(os.path.basename(os.path.dirname(seq_path)))
+        return sequence_tensor, label
 
 
 class FireDataModule(pl.LightningDataModule):

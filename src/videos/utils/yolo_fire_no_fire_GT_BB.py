@@ -143,7 +143,7 @@ def process_image(args):
 def main():
     parser = argparse.ArgumentParser(description='Draw GT bounding boxes on wildfire dataset')
     parser.add_argument('--input_dir', type=str, 
-                       default='/vol/bitbucket/si324/rf-detr-wildfire/src/videos/data'
+                       default='/vol/bitbucket/si324/rf-detr-wildfire/src/videos/data',
                        help='Input dataset directory')
     parser.add_argument('--workers', type=int, default=multiprocessing.cpu_count(),
                        help='Number of parallel workers')
@@ -207,7 +207,7 @@ def main():
     for key in sorted(stats.keys()):
         print(f"  {key}: {stats[key]} images")
     
-    print(f"\nOutput saved to: /vol/bitbucket/si324/rf-detr-wildfire/src/videos/bounding_boxes/only_labeled_GT_BB")
+    print(f"\nOutput saved to: /vol/bitbucket/si324/rf-detr-wildfire/src/videos/bounding_boxes/fire_no_fire_GT_BB")
 
 
 if __name__ == '__main__':

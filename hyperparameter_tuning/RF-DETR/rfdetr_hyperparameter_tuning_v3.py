@@ -425,7 +425,7 @@ def objective(trial):
         )
         
         train_time = time.time() - train_start
-        print(f"  Training complete in {train_time/3600:.1f} hours")
+        print(f" Training complete in {train_time/3600:.1f} hours")
         
         # Parse and plot training metrics
         training_metrics = parse_training_log(os.path.join(trial_dir, "checkpoints"))
@@ -476,7 +476,7 @@ def objective(trial):
         with open(os.path.join(trial_dir, "results.json"), 'w') as f:
             json.dump(results, f, indent=2)
         
-        # Save human-readable summary
+        # Save summary
         with open(os.path.join(trial_dir, "summary.txt"), 'w') as f:
             f.write(f"TRIAL {trial.number} SUMMARY\n")
             f.write("="*60 + "\n\n")

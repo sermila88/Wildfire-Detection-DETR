@@ -1,7 +1,5 @@
 # Experiment Output Structure
 
-This project uses an organized experiment structure to keep all outputs clean and manageable.
-
 ## 📁 Directory Structure
 
 ```

@@ -1,0 +1,28 @@
+Experiment: rfdetr_hyperparameter_tuning_v3_eval
+==================================================
+
+IoU threshold (this eval): 0.01
+YOLO baseline IoU: 0.01
+IMAGE LEVEL PRIMARY METRICS:
+Precision: 0.9397
+Recall: 0.8766
+F1 Score: 0.9071
+Accuracy: 0.8451
+
+IMAGE LEVEL CONFUSION MATRIX:
+TP: 405
+TN: 48
+FP: 26
+FN: 57
+
+OBJECT LEVEL PRIMARY METRICS:
+Precision: 0.8510
+Recall: 0.7269
+F1 Score: 0.7841
+Accuracy: N/A
+
+OBJECT LEVEL CONFUSION MATRIX:
+TP: 354
+TN: N/A
+FP: 62
+FN: 133

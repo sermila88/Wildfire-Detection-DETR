@@ -1,34 +1,34 @@
 #!/bin/bash
+#SBATCH --job-name=rfdetr_test_eval_trial_6
 #SBATCH --gres=gpu:1
 #SBATCH --mem=32G
-#SBATCH --mail-type=ALL
-#SBATCH --mail-user=si324
-#SBATCH --output=/vol/bitbucket/si324/rf-detr-wildfire/outputs/rf_detr_hyperparameter_tuning_v2/logs/eval_trial003_%j.out
-#SBATCH --error=/vol/bitbucket/si324/rf-detr-wildfire/outputs/rf_detr_hyperparameter_tuning_v2/logs/eval_trial003_%j.err
-#SBATCH --job-name=eval_trial003
+#SBATCH --mail-type=ALL 
+#SBATCH --mail-user=si324 
+#SBATCH --output=/vol/bitbucket/si324/rf-detr-wildfire/outputs/rfdetr_test_eval_final_hparam_tun_trial_6/logs/eval-%j.out
+#SBATCH --error=/vol/bitbucket/si324/rf-detr-wildfire/outputs/rfdetr_test_eval_final_hparam_tun_trial_6/logs/eval-%j.err
 
-
+# Activate environment
 export PATH=/vol/bitbucket/${USER}/rf-detr-wildfire/.venv/bin:$PATH
 source /vol/bitbucket/${USER}/rf-detr-wildfire/.venv/bin/activate
 source /vol/cuda/12.0.0/setup.sh
 /usr/bin/nvidia-smi
 
-# Create logs directory if it doesn't exist
-mkdir -p /vol/bitbucket/si324/rf-detr-wildfire/outputs/rf_detr_hyperparameter_tuning_v2/logs
+# Go to the project folder 
+cd /vol/bitbucket/${USER}/rf-detr-wildfire
 
-# Change to the directory with the eval script
-cd /vol/bitbucket/si324/rf-detr-wildfire/eval
+# Define paths
+CHECKPOINT="/vol/bitbucket/si324/rf-detr-wildfire/outputs/rf_detr_hyperparameter_tuning_v3/trial_006/checkpoints/checkpoint_best_ema.pth"
+RESOLUTION=1232
+OUTPUT_DIR="/vol/bitbucket/si324/rf-detr-wildfire/outputs/rfdetr_test_eval_final_hparam_tun_trial_6"
 
-# Evaluate trial_003
-BASE_DIR="/vol/bitbucket/si324/rf-detr-wildfire/outputs/rf_detr_hyperparameter_tuning_v2"
+# Create output directory
+mkdir -p ${OUTPUT_DIR}
+mkdir -p /vol/bitbucket/si324/rf-detr-wildfire/outputs/rfdetr_test_eval_final_hparam_tun_trial_6/logs/
 
-echo "Starting evaluation of Trial 003 at $(date)"
-echo "Checkpoint: $BASE_DIR/trial_003/checkpoints/checkpoint_best_ema.pth"
-echo "Resolution: 1120"
+# Run evaluation with SAFE output location
+python eval/rfdetr_hparameter_tuning_eval.py \
+  --checkpoint ${CHECKPOINT} \
+  --resolution ${RESOLUTION} \
+  --output_dir ${OUTPUT_DIR}
 
-python rfdetr_initial_hyperparameter_tuning_eval.py \
-    --checkpoint "$BASE_DIR/trial_003/checkpoints/checkpoint_best_ema.pth" \
-    --resolution 1120 \
-    --experiment_name "trial_003_eval_IoU_0.01"
-
-echo "Evaluation complete at $(date)!"
+echo "✅ Evaluation complete! Results in ${OUTPUT_DIR}"

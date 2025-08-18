@@ -1,7 +1,7 @@
 {
   "experiment_info": {
     "experiment_name": "rfdetr_smoke_detection_v1_IoU=0.01",
-    "timestamp": "2025-08-15 21:36:45",
+    "timestamp": "2025-08-18 16:32:42",
     "iou_threshold": 0.01,
     "yolo_baseline_iou_threshold": 0.01,
     "dataset_path": "/vol/bitbucket/si324/rf-detr-wildfire/data/pyro25img/images/test"
