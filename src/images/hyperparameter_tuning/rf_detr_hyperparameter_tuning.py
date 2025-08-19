@@ -762,7 +762,7 @@ def main():
     # Save experiment configuration
     config = {
         "experiment_name": EXPERIMENT_NAME,
-        "optimization_metric": "object_level_f1_with_best_threshold",
+        "optimization_metric": "f1_with_best_threshold",
         "methodology": "Smart threshold sweep - each model evaluated at its best",
         "iou_threshold": IOU_THRESHOLD,
         "confidence_thresholds_tested": CONFIDENCE_THRESHOLDS.tolist(),
