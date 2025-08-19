@@ -35,7 +35,7 @@ from torchmetrics import Accuracy, Precision, Recall
 import wandb
 from pytorch_lightning.loggers import WandbLogger
 import torchvision.transforms as T
-from custom_tf import apply_transform_list
+# from custom_tf import apply_transform_list
 
 # Optional: set this if debugging CUDA launches
 # os.environ['CUDA_LAUNCH_BLOCKING'] = '1'
@@ -108,7 +108,8 @@ class FireSeriesDataset(Dataset):
         seq_path = self.sequence_paths[idx]
         image_files = sorted(glob.glob(os.path.join(seq_path, "*.jpg")))
         if not image_files:
-            raise FileNotFoundError(f"No .jpg files in {seq_path}")
+            print(f"Warning: No .jpg files in {seq_path}, skipping...")
+            return self.__getitem__((idx + 1) % len(self))
 
         # Read all label files to compute median bounding box
         # Skip frames without valid labels
@@ -305,6 +306,8 @@ def main():
     )
     parser.add_argument('--data_dir', type=str, required=True,
                         help='Root directory containing train/ and val/ subfolders')
+    parser.add_argument('--output_dir', type=str, default='./lightning_logs',
+                    help='Directory for saving checkpoints and logs')
     parser.add_argument('--batch_size', type=int, default=16,
                         help='Batch size for training and validation')
     parser.add_argument('--img_size', type=int, default=112,
@@ -321,6 +324,17 @@ def main():
 
     pl.seed_everything(42)
 
+    if torch.cuda.is_available():
+        gpu_name = torch.cuda.get_device_name(0)
+        print(f"GPU: {gpu_name}")
+        print(f"GPU Memory: {torch.cuda.get_device_properties(0).total_memory / 1e9:.1f} GB")
+    else:
+        print("WARNING: No GPU detected!")
+
+    import time
+    start_time = time.time()
+    print(f"Training started at: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+
     # Prepare data
     dm = FireDataModule(
         data_dir=args.data_dir,
@@ -334,7 +348,11 @@ def main():
 
     # Callbacks and logger
     checkpoint_cb = ModelCheckpoint(
-        monitor='val_acc', mode='max', save_top_k=1
+        dirpath=os.path.join(args.output_dir, 'checkpoints'),
+        filename='best-{epoch:02d}-{val_acc:.3f}',
+        monitor='val_acc',
+        mode='max', 
+        save_top_k=1
     )
     wandb_logger = WandbLogger(project=args.wandb_project)
 
@@ -342,12 +360,18 @@ def main():
     trainer = pl.Trainer(
         max_epochs=args.max_epochs,
         callbacks=[checkpoint_cb],
-        logger=wandb_logger
+        logger=wandb_logger,
+        default_root_dir=args.output_dir
     )
 
     # Train
     trainer.fit(model, dm)
     wandb.finish()
+
+    end_time = time.time()
+    duration = (end_time - start_time) / 3600  # Convert to hours
+    print(f"Training completed at: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    print(f"Total training time: {duration:.2f} hours")
 
 
 if __name__ == '__main__':
