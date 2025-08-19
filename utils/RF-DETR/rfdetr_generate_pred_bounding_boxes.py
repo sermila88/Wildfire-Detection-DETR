@@ -235,7 +235,7 @@ def draw_bounding_boxes(image_path, predictions, annotations, output_path,
             pass
         
         elif img_classification == 'TN':
-            # No GT and no predictions - nothing to draw except maybe a note
+            # No GT and no predictions - nothing to draw 
             pass
         
         # Draw FN markers (blue circles) for unmatched GT boxes (for FN and TP images)

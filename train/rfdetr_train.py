@@ -59,7 +59,7 @@ model = RFDETRBase(resolution=1120)
 print(f"\n🚀 Starting training...")
 model.train(
     dataset_dir=dataset_path,
-    epochs=100,
+    epochs=30,
     batch_size=4,           
     grad_accum_steps=16,     
     lr=1e-4,
