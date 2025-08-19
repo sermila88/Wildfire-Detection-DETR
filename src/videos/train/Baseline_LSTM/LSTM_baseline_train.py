@@ -95,8 +95,9 @@ class FireSeriesDataset(Dataset):
         self.img_size = img_size
         self.transform = transform or DEFAULT_TRANSFORMS
 
-        # Gather all sequence folders
-        self.sequence_paths = glob.glob(os.path.join(root_dir, "**"), recursive=True)
+        # Gather all sequence folders (only the video folders and not the labels folder)
+        self.sequence_paths = [d for d in glob.glob(os.path.join(root_dir, "*")) 
+                       if os.path.isdir(d)]
         random.shuffle(self.sequence_paths)
 
     def __len__(self):
