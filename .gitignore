@@ -13,6 +13,8 @@ pyro25img/
 outputs/
 output_old/
 bounding_boxes/ 
+old_img_repo/
+model_preds/
 
 # SLURM job outputs
 *.out

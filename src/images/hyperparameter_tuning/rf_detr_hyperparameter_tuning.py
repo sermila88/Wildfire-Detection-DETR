@@ -1,7 +1,7 @@
 """
 ===========================================================
 RF-DETR Hyperparameter Tuning for Wildfire Smoke Detection
-OPTIMIZATION: Object-Level F1 Score 
+OPTIMIZATION: F1 Score 
 ===========================================================
 """
 
@@ -30,31 +30,35 @@ os.environ['PYTORCH_CUDA_ALLOC_CONF'] = 'expandable_segments:True'
 if torch.cuda.is_available():
     gpu_name = torch.cuda.get_device_name(0)
     gpu_id = torch.cuda.current_device()
-    print(f"🚀 Using GPU {gpu_id}: {gpu_name}")
+    print(f" Using GPU {gpu_id}: {gpu_name}")
 else:
-    print("⚠️ No GPU detected, falling back to CPU")
+    raise RuntimeError(" No GPU detected! Exiting")
 
+# Enable TF32 + fast cuDNN kernels for faster training
+torch.backends.cudnn.benchmark = True
+torch.backends.cuda.matmul.allow_tf32 = True
+torch.backends.cudnn.allow_tf32 = True
 
 # ============================================================================
 # CONFIGURATION
 # ============================================================================
-EXPERIMENT_NAME = "rf_detr_hyperparameter_tuning_v3.1"
+EXPERIMENT_NAME = "RF-DETR_hyperparameter_tuning"
 PROJECT_ROOT = "/vol/bitbucket/si324/rf-detr-wildfire"
-DATASET_DIR = f"{PROJECT_ROOT}/data/pyro25img/images"
+DATASET_DIR = f"{PROJECT_ROOT}/src/images/data/pyro25img/images"
 
-# VALIDATION SET ONLY!
+# VALIDATION SET 
 VALIDATION_DIR = f"{DATASET_DIR}/valid"
 VALIDATION_ANNOTATIONS = f"{VALIDATION_DIR}/_annotations.coco.json"
 
-OUTPUT_DIR = f"{PROJECT_ROOT}/outputs/{EXPERIMENT_NAME}"
+OUTPUT_DIR = f"{PROJECT_ROOT}/src/images/outputs/{EXPERIMENT_NAME}"
 
 # Evaluation parameters
-IOU_THRESHOLD = 0.01  
-CONFIDENCE_THRESHOLDS = np.arange(0.1, 0.9, 0.05)  # For threshold sweep
+IOU_THRESHOLD = 0.1  
+CONFIDENCE_THRESHOLDS = np.linspace(0.10, 0.90, 17)  # For threshold sweep
 
 # Training configuration
-N_TRIALS = 10  
-EFFECTIVE_BATCH_SIZE = 16  # RF-DETR recommended
+N_TRIALS = 10
+EFFECTIVE_BATCH_SIZE = 16  # RF-DETR documentation
 
 # Create output directory
 os.makedirs(OUTPUT_DIR, exist_ok=True)
@@ -71,10 +75,11 @@ logging.basicConfig(
 )
 
 # ============================================================================
-# CORE EVALUATION FUNCTIONS
+# EVALUATION FUNCTIONS
 # ============================================================================
 def box_iou(box1: np.ndarray, box2: np.ndarray, eps: float = 1e-7):
-    """Calculate IoU - exact copy from eval script"""
+    """Calculate IoU """
+    # Ensure box1 and box2 are in the shape (N, 4) even if N is 1
     if box1.ndim == 1:
         box1 = box1.reshape(1, 4)
     if box2.ndim == 1:
@@ -92,25 +97,26 @@ def cache_predictions(model, val_dataset, min_conf=0.01):
     all_predictions = []
     
     start_time = time.time()
-    for path, _, annotations in tqdm(val_dataset, desc="Inference", leave=False):
-        with Image.open(path) as img:
-            img_rgb = img.convert("RGB")
-            preds = model.predict(img_rgb, threshold=min_conf)
+    with torch.inference_mode():
+        for path, _, annotations in tqdm(val_dataset, desc="Inference", leave=False):
+            with Image.open(path) as img:
+                img_rgb = img.convert("RGB")
+                preds = model.predict(img_rgb, threshold=min_conf)
 
-            # --- SAFETY GUARD: must have confidences and lengths must match ---
-            assert hasattr(preds, 'confidence') and preds.confidence is not None \
-                and len(preds.confidence) == len(preds.xyxy), \
-                f"Missing/mismatched confidences for {os.path.basename(path)}; cannot sweep thresholds safely."
+                # --- SAFETY GUARD: must have confidences and lengths must match ---
+                assert hasattr(preds, 'confidence') and preds.confidence is not None \
+                    and len(preds.confidence) == len(preds.xyxy), \
+                    f"Missing/mismatched confidences for {os.path.basename(path)}; cannot sweep thresholds safely."
 
-            boxes = np.array(preds.xyxy, dtype=float)
-            confidences = np.array(preds.confidence, dtype=float)
-            
-        all_predictions.append({
-            'path': path,
-            'annotations': annotations,
-            'boxes': boxes,
-            'confidences': confidences
-        })
+                boxes = np.array(preds.xyxy, dtype=float)
+                confidences = np.array(preds.confidence, dtype=float)
+                
+            all_predictions.append({
+                'path': path,
+                'annotations': annotations,
+                'boxes': boxes,
+                'confidences': confidences
+            })
     
     inference_time = time.time() - start_time
     print(f"    Inference complete in {inference_time:.1f} seconds")
@@ -119,9 +125,9 @@ def cache_predictions(model, val_dataset, min_conf=0.01):
 
 def evaluate_at_threshold(cached_predictions, confidence_threshold):
     """
-    Evaluate cached predictions at specific threshold (FAST!)
+    Evaluate cached predictions at specific threshold 
     """
-    obj_tp = obj_fp = obj_fn = 0
+    tp = fp = fn = 0
     
     for pred_data in cached_predictions:
         # Filter by confidence 
@@ -131,36 +137,37 @@ def evaluate_at_threshold(cached_predictions, confidence_threshold):
         else:
             filtered_boxes = boxes_all[pred_data['confidences'] >= confidence_threshold]
 
-        
-        # Object-level evaluation
-        gt = np.array(pred_data['annotations'].xyxy)
-        
-        if gt.size == 0:
-            obj_fp += len(filtered_boxes)
-        else:
-            matched = np.zeros(len(gt), dtype=bool)
-            for pb in filtered_boxes:
-                ious = []
-                for gt_box in gt:
-                    iou_val = box_iou(pb, gt_box)[0, 0]
-                    ious.append(iou_val)
+        # Get ground truth boxes
+        gt_boxes = np.array(pred_data['annotations'].xyxy)
+        gt_matches = np.zeros(len(gt_boxes), dtype=bool) if gt_boxes.size > 0 else np.array([])
+
+        # Process each prediction 
+        for pred_box in filtered_boxes:
+            if gt_boxes.size > 0: 
+                # Find the best match by IoU
+                iou_values = [box_iou(pred_box, gt_box)[0, 0] for gt_box in gt_boxes]
+                max_iou = max(iou_values)
+                best_match_idx = np.argmax(iou_values)
                 
-                if ious:
-                    max_iou = float(np.max(ious))
-                    idx = int(np.argmax(ious))
-                    if max_iou > IOU_THRESHOLD and not matched[idx]:
-                        obj_tp += 1
-                        matched[idx] = True
-                    else:
-                        obj_fp += 1
-            obj_fn += int((~matched).sum())
+                # Check for a valid and unique match
+                if max_iou > IOU_THRESHOLD and not gt_matches[best_match_idx]:
+                    tp += 1
+                    gt_matches[best_match_idx] = True
+                else:
+                    fp += 1
+            else:
+                fp += 1  #If no GT boxes, prediction is FP
+        
+        # Count unmatched GT boxes as FN
+        if gt_boxes.size > 0:  
+            fn += len(gt_boxes) - np.sum(gt_matches)
     
     # Calculate metrics
-    precision = obj_tp / (obj_tp + obj_fp) if (obj_tp + obj_fp) > 0 else 0.0
-    recall = obj_tp / (obj_tp + obj_fn) if (obj_tp + obj_fn) > 0 else 0.0
-    f1 = 2 * precision * recall / (precision + recall) if (precision + recall) > 0 else 0.0
+    precision = tp / (tp + fp) if (tp + fp) > 0 else 0.0
+    recall = tp / (tp + fn) if (tp + fn) > 0 else 0.0
+    f1 = 2 * ( precision * recall ) / (precision + recall) if (precision + recall) > 0 else 0.0
     
-    return f1, precision, recall, obj_tp, obj_fp, obj_fn
+    return f1, precision, recall, tp, fp, fn
 
 def find_best_threshold(cached_predictions, confidence_thresholds):
     """
@@ -228,7 +235,7 @@ def parse_training_log(checkpoint_dir):
     
     return metrics
 
-def plot_training_curves(trial_dir, metrics):
+def plot_training_curves(trial_dir, metrics, experiment_name=EXPERIMENT_NAME):
     """Generate comprehensive training plots"""
     if len(metrics['epochs']) < 2:
         return
@@ -250,7 +257,7 @@ def plot_training_curves(trial_dir, metrics):
             axes[0, 0].scatter(min_epoch, min_loss, color='red', s=100, zorder=5)
             axes[0, 0].text(min_epoch, min_loss, f' Min: {min_loss:.4f}', fontsize=9)
     
-    # 2. mAP (if tracked internally by RF-DETR)
+    # 2. mAP 
     if metrics['mAP']:
         axes[0, 1].plot(metrics['epochs'][:len(metrics['mAP'])], metrics['mAP'], 'g-', linewidth=2)
         axes[0, 1].set_title('Validation mAP (RF-DETR Internal)', fontsize=12, weight='bold')
@@ -270,7 +277,6 @@ def plot_training_curves(trial_dir, metrics):
         
         # Add smoothed line
         if len(metrics['train_loss']) > 5:
-            from scipy.ndimage import uniform_filter1d
             smoothed = uniform_filter1d(metrics['train_loss'], size=5, mode='nearest')
             axes[1, 0].plot(metrics['epochs'], smoothed, 'r-', linewidth=2, label='Smoothed')
         
@@ -300,12 +306,12 @@ def plot_training_curves(trial_dir, metrics):
     axes[1, 1].text(0.1, 0.9, summary_text, transform=axes[1, 1].transAxes,
                    fontsize=11, verticalalignment='top', family='monospace')
     
-    plt.suptitle('RF-DETR Training Analysis', fontsize=14, weight='bold')
+    plt.suptitle(f'{EXPERIMENT_NAME} Training Analysis', fontsize=14, weight='bold')
     plt.tight_layout()
     plt.savefig(os.path.join(trial_dir, 'training_curves.png'), dpi=150, bbox_inches='tight')
     plt.close()
 
-def plot_threshold_analysis(trial_dir, threshold_results, best_result):
+def plot_threshold_analysis(trial_dir, threshold_results, best_result, experiment_name=EXPERIMENT_NAME):
     """Plot confidence threshold sweep"""
     fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(15, 6))
     
@@ -338,7 +344,7 @@ def plot_threshold_analysis(trial_dir, threshold_results, best_result):
     ax2.grid(True, alpha=0.3)
     ax2.set_ylim([0, 1])
     
-    plt.suptitle(f'Threshold Analysis - Best F1: {best_result["f1_score"]:.4f} @ {best_result["confidence"]:.1f}',
+    plt.suptitle(f'{EXPERIMENT_NAME} Threshold Analysis - Best F1: {best_result["f1_score"]:.4f} @ {best_result["confidence"]:.1f}',
                 fontsize=14, weight='bold')
     plt.tight_layout()
     plt.savefig(os.path.join(trial_dir, 'threshold_analysis.png'), dpi=150, bbox_inches='tight')
@@ -351,17 +357,25 @@ def objective(trial):
     """
     Optuna objective with smart threshold selection and comprehensive analysis
     """
+    # First suggest resolution
+    resolution = trial.suggest_categorical('resolution', [896, 1120])
+
+    # Memory-aware batch size for gpgpuB
+    if resolution >= 1120:
+        batch_size = 2  # Fixed for high resolution
+    else:
+        batch_size = trial.suggest_categorical('batch_size', [2, 4]) 
     
     # Hyperparameters for wildfire smoke detection
     hp = {
-        'epochs': trial.suggest_int('epochs', 20, 40, step=10),
-        'batch_size': trial.suggest_categorical('batch_size', [2, 4, 8, 16]),
-        'lr': trial.suggest_float('lr', 5e-5, 5e-4, log=True),
-        'lr_encoder': trial.suggest_float('lr_encoder', 5e-6, 1e-4, log=True),
-        'resolution': trial.suggest_categorical('resolution', [896, 1120, 1232]),
-        'weight_decay': trial.suggest_float('weight_decay', 1e-5, 1e-3, log=True),
-        'gradient_checkpointing': trial.suggest_categorical('gradient_checkpointing', [True, False]),
-        'use_ema': trial.suggest_categorical('use_ema', [True, False]),
+        'epochs': trial.suggest_int('epochs', 20, 30, step=10),
+        'batch_size': batch_size,
+        'lr': trial.suggest_float('lr', 5e-5, 2e-4, log=True),
+        'lr_encoder': trial.suggest_float('lr_encoder', 2e-6, 5e-5, log=True),
+        'resolution': resolution,
+        'weight_decay': trial.suggest_float('weight_decay', 3e-5, 3e-4, log=True),
+        'gradient_checkpointing': False,
+        'use_ema': True,
     }
     
     # Calculate gradient accumulation
@@ -395,34 +409,80 @@ def objective(trial):
         print(f"  Loaded {len(val_ds)} validation images")
         
         # Initialize and train model
-        model = RFDETRBase(resolution=hp['resolution'])
+        model = RFDETRBase(resolution=hp['resolution'], num_classes=1)
         
         print(f"  Training for {hp['epochs']} epochs...")
         train_start = time.time()
-        
-        model.train(
-            dataset_dir=DATASET_DIR,
-            output_dir=os.path.join(trial_dir, "checkpoints"),
-            epochs=hp['epochs'],
-            batch_size=hp['batch_size'],
-            grad_accum_steps=hp['grad_accum_steps'],
-            lr=hp['lr'],
-            lr_encoder=hp['lr_encoder'],
-            resolution=hp['resolution'],
-            weight_decay=hp['weight_decay'],
-            gradient_checkpointing=hp['gradient_checkpointing'],
-            use_ema=hp['use_ema'],
-            device="cuda",
-            early_stopping=True,
-            early_stopping_patience=10,
-            early_stopping_min_delta=0.001,
-            early_stopping_use_ema=True,
-            save_period=10,
-            verbose=False,
-            plots=False,
-            tensorboard=False,
-            wandb=True
-        )
+
+        max_oom_adapts = 4
+        attempt = 0
+        while True:
+            try:
+                model.train(
+                    dataset_dir=DATASET_DIR,
+                    output_dir=os.path.join(trial_dir, "checkpoints"),
+                    epochs=hp['epochs'],
+                    batch_size=hp['batch_size'],
+                    grad_accum_steps=hp['grad_accum_steps'],
+                    lr=hp['lr'],
+                    lr_encoder=hp['lr_encoder'],
+                    resolution=hp['resolution'],
+                    weight_decay=hp['weight_decay'],
+                    gradient_checkpointing=hp['gradient_checkpointing'],
+                    use_ema=hp['use_ema'],
+                    device="cuda",
+                    use_amp=True,
+                    ddp=False,
+                    early_stopping=True,
+                    early_stopping_patience=8,
+                    early_stopping_min_delta=0.001,
+                    early_stopping_use_ema=True,
+                    tensorboard=False,
+                    wandb=False
+                )
+                break  # Success
+                
+            except RuntimeError as e:
+                msg = str(e).lower()
+                oom_hits = ("out of memory" in msg or
+                            "cuda out of memory" in msg or
+                            "cublas" in msg and "memory" in msg)
+
+                if not oom_hits:
+                    raise  # not a memory issue; bubble up
+
+                attempt += 1
+                if attempt >= max_oom_adapts:
+                    print("     → Too many OOM adaptations; pruning.")
+                    raise optuna.TrialPruned()
+                torch.cuda.empty_cache()
+                print("  ⚠️  CUDA OOM caught. Adapting hyperparameters...")
+
+                # 1) Prefer keeping resolution; reduce BS but never below 2
+                if hp['batch_size'] > 2:
+                    old_bs = hp['batch_size']
+                    hp['batch_size'] //= 2
+                    hp['grad_accum_steps'] = max(1, EFFECTIVE_BATCH_SIZE // hp['batch_size'])
+                    print(f"     → Retrying with batch_size={hp['batch_size']} "
+                        f"(was {old_bs}), grad_accum_steps={hp['grad_accum_steps']} "
+                        f"(eff≈{hp['batch_size']*hp['grad_accum_steps']})")
+
+                # 2) If we’re already at BS=2 and still OOM at 1120, drop to 896 and re-init
+                elif hp['resolution'] == 1120:
+                    hp['resolution'] = 896
+                    print("     → Retrying with resolution=896")
+                    del model
+                    torch.cuda.empty_cache()
+                    model = RFDETRBase(resolution=hp['resolution'], num_classes=1)
+
+                # 3) Nothing left to shrink under your rules (no BS=1) → prune
+                else:
+                    print("     → Reached minimum BS=2 and resolution=896. Pruning trial.")
+                    raise optuna.TrialPruned()
+
+        # Ensure saved hparams reflect any OOM-driven changes (batch size/resolution)
+        with open(os.path.join(trial_dir, "hyperparameters.json"), "w") as f:
+            json.dump(hp, f, indent=2)
         
         train_time = time.time() - train_start
         print(f" Training complete in {train_time/3600:.1f} hours")
@@ -438,9 +498,10 @@ def objective(trial):
         
         print(f"  Loading checkpoint for evaluation...")
         eval_model = RFDETRBase(pretrain_weights=checkpoint_path, num_classes=1, resolution=hp['resolution'])
-        
-        # SMART EVALUATION: Cache predictions once
+
+        # Cache predictions once (no gradients, faster & leaner)
         cached_predictions = cache_predictions(eval_model, val_ds, min_conf=0.01)
+
         
         # Find best confidence threshold
         print(f"  Finding optimal confidence threshold...")
@@ -470,7 +531,15 @@ def objective(trial):
             "best_result": best_result,
             "all_threshold_results": all_threshold_results,
             "training_metrics": training_metrics,
-            "timestamp": datetime.now().isoformat()
+            "timestamp": datetime.now().isoformat(),
+            "hardware": {
+                    "gpu": gpu_name, 
+                    "cuda_version": torch.version.cuda,
+                    "torch_version": torch.__version__,
+                    "compute_capability": torch.cuda.get_device_capability(0),  
+                    "memory_allocated_gb": torch.cuda.max_memory_allocated() / 1e9,
+                    "memory_reserved_gb": torch.cuda.max_memory_reserved() / 1e9
+            },
         }
         
         with open(os.path.join(trial_dir, "results.json"), 'w') as f:
@@ -505,16 +574,8 @@ def objective(trial):
             f.write(f"  Total trial time: {trial_time/3600:.1f} hours\n")
         
         logging.info(f"Trial {trial.number}: F1={best_result['f1_score']:.4f} @ conf={best_result['confidence']:.1f}")
-        
-        with open(os.path.join(trial_dir, "gpu_info.json"), "w") as f:
-            json.dump({
-                "gpu_id": gpu_id,
-                "gpu_name": gpu_name,
-                "cuda_version": torch.version.cuda,
-                "torch_version": torch.__version__
-            }, f, indent=2)
 
-        return best_result['f1_score']  # RETURN BEST F1 THIS MODEL CAN ACHIEVE
+        return best_result['f1_score']  # RETURN BEST F1 
         
     except Exception as e:
         error_msg = f"ERROR in trial {trial.number}: {str(e)}"
@@ -675,7 +736,7 @@ def create_optimization_summary(study, output_dir):
     ax9.text(0.1, 0.9, summary_text, transform=ax9.transAxes,
             fontsize=10, verticalalignment='top', family='monospace')
     
-    fig.suptitle(f'Hyperparameter Optimization Summary - Best F1: {study.best_trial.value:.4f}',
+    fig.suptitle(f'{EXPERIMENT_NAME} Summary - Best F1: {study.best_trial.value:.4f}',
                 fontsize=16, weight='bold')
     
     plt.savefig(os.path.join(output_dir, 'optimization_summary.png'), dpi=150, bbox_inches='tight')
