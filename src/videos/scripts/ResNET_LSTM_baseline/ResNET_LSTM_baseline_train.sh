@@ -15,7 +15,6 @@ source /vol/cuda/12.0.0/setup.sh
 # Go to the project folder and run the training script
 cd /vol/bitbucket/${USER}/rf-detr-wildfire
 
-
 python src/videos/train/Baseline_LSTM/LSTM_baseline_train.py \
   --data_dir /path/to/data \
   --batch_size 16 \

@@ -134,10 +134,13 @@ class FireSeriesDataset(Dataset):
                             labels.append(np.array(bbox, dtype=float))
                             valid_image_files.append(img_path)
 
+        # Only stack if we have labels
+        if labels:
+            labels = np.stack(labels)
+        else:
+            return self.__getitem__((idx + 1) % len(self)) # Else, skip to next sequence
 
-        image_files = valid_image_files # Only keep images with valid labels
-        if not labels: # If NO frames had valid labels
-            return self.__getitem__((idx + 1) % len(self)) # Skip to next sequence
+        image_files = valid_image_files
 
         # Calculate center and size of the bounding box
         xc, yc = np.median(labels[:, :2], axis=0)
@@ -146,7 +149,7 @@ class FireSeriesDataset(Dataset):
         # Load frames and determine crop coordinates
         frames = [Image.open(f) for f in image_files]
         w, h = frames[0].size
-        crop_dim = max(wb * h, hb * h, self.img_size)
+        crop_dim = max(wb * w, hb * h, self.img_size)
         x0 = int(xc * w - crop_dim / 2)
         y0 = int(yc * h - crop_dim / 2)
         x1, y1 = x0 + crop_dim, y0 + crop_dim
