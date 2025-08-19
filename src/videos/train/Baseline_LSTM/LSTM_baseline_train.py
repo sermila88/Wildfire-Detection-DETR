@@ -167,8 +167,9 @@ class FireSeriesDataset(Dataset):
         # Stack into tensor shape (T, C, H, W)
         sequence_tensor = torch.stack(tensors)
 
-        # Label extracted from parent folder name (assumes numeric)
-        label = int(os.path.basename(os.path.dirname(seq_path)))
+        #  If we have any valid bounding boxes = fire present (1)
+        # No boxes = no fire (0)
+        label = 1 if len(labels) > 0 else 0
         return sequence_tensor, label
 
 
