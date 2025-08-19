@@ -111,23 +111,33 @@ class FireSeriesDataset(Dataset):
             raise FileNotFoundError(f"No .jpg files in {seq_path}")
 
         # Read all label files to compute median bounding box
+        # Skip frames without valid labels
         labels = []
+        valid_image_files = []
+        # Go through all images
         for img_path in image_files:
 
             # Correct path: video/image.jpg → video/labels/image.txt
+            dir_path = os.path.dirname(img_path) # Get video folder
+            filename = os.path.basename(img_path).replace(".jpg", ".txt") # Get filename.txt
+            label_path = os.path.join(dir_path, "labels", filename) # video/labels/frame.txt
+            
+            # Check if label file exists
+            if os.path.exists(label_path):
+                with open(label_path, "r") as lf:
+                    content = lf.readline().strip()
+                    if content:  # Not empty file
+                        parts = content.split()
+                        if len(parts) >= 5:  # Has class_id + bbox
+                            bbox = parts[1:5]  # x_center, y_center, width, height
+                            # Append bbox to labels
+                            labels.append(np.array(bbox, dtype=float))
+                            valid_image_files.append(img_path)
 
-            # Get the directory containing the image
-            dir_path = os.path.dirname(img_path)
-            # Get just the filename and change extension
-            filename = os.path.basename(img_path).replace(".jpg", ".txt")
-            # Build the correct path with "labels" subfolder
-            label_path = os.path.join(dir_path, "labels", filename)
 
-            print(label_path)
-            with open(label_path, "r") as lf:
-                line = lf.readline().strip().split()[1:5]
-            labels.append(np.array(line, dtype=float))
-        labels = np.stack(labels)
+        image_files = valid_image_files # Only keep images with valid labels
+        if not labels: # If NO frames had valid labels
+            return self.__getitem__((idx + 1) % len(self)) # Skip to next sequence
 
         # Calculate center and size of the bounding box
         xc, yc = np.median(labels[:, :2], axis=0)
