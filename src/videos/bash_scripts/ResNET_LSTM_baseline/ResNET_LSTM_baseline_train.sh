@@ -1,7 +1,7 @@
 #!/bin/bash
 #SBATCH --job-name=resnet_lstm_baseline_train
-#SBATCH --output=/vol/bitbucket/si324/rf-detr-wildfire/src/videos/train_outputs/ResNET_LSTM_baseline/logs/%j.out
-#SBATCH --error=/vol/bitbucket/si324/rf-detr-wildfire/src/videos/train_outputs/ResNET_LSTM_baseline/logs/%j.err
+#SBATCH --output=/vol/bitbucket/si324/rf-detr-wildfire/src/videos/train_outputs/ResNET_LSTM_baseline/logs/%x-%j.out
+#SBATCH --error=/vol/bitbucket/si324/rf-detr-wildfire/src/videos/train_outputs/ResNET_LSTM_baseline/logs/%x-%j.err
 #SBATCH --mem=32G
 #SBATCH --gres=gpu:1
 #SBATCH --partition=gpgpuB,gpgpu,AMD7-A100-T

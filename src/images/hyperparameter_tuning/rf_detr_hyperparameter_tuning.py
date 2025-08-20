@@ -25,6 +25,16 @@ import re
 import logging
 from scipy.ndimage import uniform_filter1d 
 
+class NumpyEncoder(json.JSONEncoder):
+    def default(self, obj):
+        if isinstance(obj, np.integer):
+            return int(obj)
+        elif isinstance(obj, np.floating):
+            return float(obj)
+        elif isinstance(obj, np.ndarray):
+            return obj.tolist()
+        return super(NumpyEncoder, self).default(obj)
+
 os.environ['PYTORCH_CUDA_ALLOC_CONF'] = 'expandable_segments:True'
 
 if torch.cuda.is_available():
@@ -57,7 +67,7 @@ IOU_THRESHOLD = 0.1
 CONFIDENCE_THRESHOLDS = np.linspace(0.10, 0.90, 17)  # For threshold sweep
 
 # Training configuration
-N_TRIALS = 10
+N_TRIALS = 12
 EFFECTIVE_BATCH_SIZE = 16  # RF-DETR documentation
 
 # Create output directory
@@ -167,7 +177,7 @@ def evaluate_at_threshold(cached_predictions, confidence_threshold):
     recall = tp / (tp + fn) if (tp + fn) > 0 else 0.0
     f1 = 2 * ( precision * recall ) / (precision + recall) if (precision + recall) > 0 else 0.0
     
-    return f1, precision, recall, tp, fp, fn
+    return f1, precision, recall, int(tp), int(fp), int(fn)
 
 def find_best_threshold(cached_predictions, confidence_thresholds):
     """
@@ -358,22 +368,23 @@ def objective(trial):
     Optuna objective with smart threshold selection and comprehensive analysis
     """
     # First suggest resolution
-    resolution = trial.suggest_categorical('resolution', [896, 1120])
+    resolution = trial.suggest_categorical('resolution', [728, 896, 1120])
 
-    # Memory-aware batch size for gpgpuB
     if resolution >= 1120:
-        batch_size = 2  # Fixed for high resolution
-    else:
-        batch_size = trial.suggest_categorical('batch_size', [2, 4]) 
+        batch_size = trial.suggest_categorical('batch_size', [2, 4])  
+    elif resolution >= 896:
+        batch_size = trial.suggest_categorical('batch_size', [4,8])  
+    else:  
+        batch_size = trial.suggest_categorical('batch_size', [8, 16])
     
     # Hyperparameters for wildfire smoke detection
     hp = {
-        'epochs': trial.suggest_int('epochs', 20, 30, step=10),
+        'epochs': trial.suggest_int('epochs', 20, 40, step=5),
         'batch_size': batch_size,
         'lr': trial.suggest_float('lr', 5e-5, 2e-4, log=True),
-        'lr_encoder': trial.suggest_float('lr_encoder', 2e-6, 5e-5, log=True),
+        'lr_encoder': trial.suggest_float('lr_encoder', 2e-6, 2e-5, log=True),
         'resolution': resolution,
-        'weight_decay': trial.suggest_float('weight_decay', 3e-5, 3e-4, log=True),
+        'weight_decay': trial.suggest_float('weight_decay', 5e-5, 3e-4, log=True),
         'gradient_checkpointing': False,
         'use_ema': True,
     }
@@ -398,7 +409,7 @@ def objective(trial):
     
     # Save hyperparameters
     with open(os.path.join(trial_dir, "hyperparameters.json"), 'w') as f:
-        json.dump(hp, f, indent=2)
+        json.dump(hp, f, indent=2, cls=NumpyEncoder)
     
     try:
         # Load validation dataset
@@ -444,46 +455,14 @@ def objective(trial):
                 
             except RuntimeError as e:
                 msg = str(e).lower()
-                oom_hits = ("out of memory" in msg or
-                            "cuda out of memory" in msg or
-                            "cublas" in msg and "memory" in msg)
-
-                if not oom_hits:
-                    raise  # not a memory issue; bubble up
-
-                attempt += 1
-                if attempt >= max_oom_adapts:
-                    print("     → Too many OOM adaptations; pruning.")
-                    raise optuna.TrialPruned()
+                if "out of memory" not in msg and "cuda out of memory" not in msg:
+                    raise  # Not memory issue
+                
+                # Simple fallback for A30
                 torch.cuda.empty_cache()
-                print("  ⚠️  CUDA OOM caught. Adapting hyperparameters...")
+                print(" CUDA OOM - Pruning trial")
+                raise optuna.TrialPruned()  # Prune trial
 
-                # 1) Prefer keeping resolution; reduce BS but never below 2
-                if hp['batch_size'] > 2:
-                    old_bs = hp['batch_size']
-                    hp['batch_size'] //= 2
-                    hp['grad_accum_steps'] = max(1, EFFECTIVE_BATCH_SIZE // hp['batch_size'])
-                    print(f"     → Retrying with batch_size={hp['batch_size']} "
-                        f"(was {old_bs}), grad_accum_steps={hp['grad_accum_steps']} "
-                        f"(eff≈{hp['batch_size']*hp['grad_accum_steps']})")
-
-                # 2) If we’re already at BS=2 and still OOM at 1120, drop to 896 and re-init
-                elif hp['resolution'] == 1120:
-                    hp['resolution'] = 896
-                    print("     → Retrying with resolution=896")
-                    del model
-                    torch.cuda.empty_cache()
-                    model = RFDETRBase(resolution=hp['resolution'], num_classes=1)
-
-                # 3) Nothing left to shrink under your rules (no BS=1) → prune
-                else:
-                    print("     → Reached minimum BS=2 and resolution=896. Pruning trial.")
-                    raise optuna.TrialPruned()
-
-        # Ensure saved hparams reflect any OOM-driven changes (batch size/resolution)
-        with open(os.path.join(trial_dir, "hyperparameters.json"), "w") as f:
-            json.dump(hp, f, indent=2)
-        
         train_time = time.time() - train_start
         print(f" Training complete in {train_time/3600:.1f} hours")
         
@@ -536,14 +515,14 @@ def objective(trial):
                     "gpu": gpu_name, 
                     "cuda_version": torch.version.cuda,
                     "torch_version": torch.__version__,
-                    "compute_capability": torch.cuda.get_device_capability(0),  
+                    "compute_capability": list(torch.cuda.get_device_capability(0)),  
                     "memory_allocated_gb": torch.cuda.max_memory_allocated() / 1e9,
                     "memory_reserved_gb": torch.cuda.max_memory_reserved() / 1e9
             },
         }
         
         with open(os.path.join(trial_dir, "results.json"), 'w') as f:
-            json.dump(results, f, indent=2)
+            json.dump(results, f, indent=2, cls=NumpyEncoder)
         
         # Save summary
         with open(os.path.join(trial_dir, "summary.txt"), 'w') as f:
@@ -773,7 +752,7 @@ def main():
     }
     
     with open(os.path.join(OUTPUT_DIR, "experiment_config.json"), 'w') as f:
-        json.dump(config, f, indent=2)
+        json.dump(config, f, indent=2, cls=NumpyEncoder)
     
     # Create Optuna study
     study = optuna.create_study(
@@ -829,7 +808,7 @@ def main():
         }
         
         with open(os.path.join(OUTPUT_DIR, "final_summary.json"), 'w') as f:
-            json.dump(summary, f, indent=2)
+            json.dump(summary, f, indent=2, cls=NumpyEncoder)
         
         print(f"\n💾 All results saved to: {OUTPUT_DIR}")
         print("\n✅ Next step: Evaluate on TEST set:")

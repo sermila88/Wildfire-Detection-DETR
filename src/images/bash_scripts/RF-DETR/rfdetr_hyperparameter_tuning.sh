@@ -1,6 +1,6 @@
 #!/bin/bash
 #SBATCH --job-name=RF-DETR_hyperparameter_tuning
-#SBATCH --partition=gpgpuB,gpgpu,AMD7-A100-T
+#SBATCH --partition=AMD7-A100-T
 #SBATCH --gres=gpu:1                  
 #SBATCH --mem=32G                           
 #SBATCH --mail-type=ALL               
