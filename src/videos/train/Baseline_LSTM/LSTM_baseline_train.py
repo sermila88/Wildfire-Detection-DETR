@@ -49,10 +49,10 @@ DEFAULT_TRANSFORMS = transforms.Compose([
 ])
 
 # Import custom transform list if available
-try:
-    from custom_tf import apply_transform_list as custom_apply_transforms
-except ImportError:
-    custom_apply_transforms = None
+#try:
+#    from custom_tf import apply_transform_list as custom_apply_transforms
+#except ImportError:
+#    custom_apply_transforms = None
 
 
 def apply_transform_list(images, transform=None):
@@ -95,8 +95,9 @@ class FireSeriesDataset(Dataset):
         self.img_size = img_size
         self.transform = transform or DEFAULT_TRANSFORMS
 
-        # Gather all sequence folders
-        self.sequence_paths = glob.glob(os.path.join(root_dir, "**"), recursive=True)
+        # Get all video folders
+        self.sequence_paths = [d for d in glob.glob(os.path.join(root_dir, "*")) 
+                       if os.path.isdir(d)]
         random.shuffle(self.sequence_paths)
 
     def __len__(self):
@@ -111,24 +112,62 @@ class FireSeriesDataset(Dataset):
 
         # Read all label files to compute median bounding box
         labels = []
+        has_smoke = False
         for img_path in image_files:
-            label_path = img_path.replace("images", "labels").replace(".jpg", ".txt")
-            with open(label_path, "r") as lf:
-                line = lf.readline().strip().split()[1:5]
-            labels.append(np.array(line, dtype=float))
-        labels = np.stack(labels)
+            # Labels are in a 'labels' subfolder with same filename but .txt extension
+            label_path = os.path.join(seq_path, "labels", 
+                         os.path.basename(img_path).replace(".jpg", ".txt"))
 
-        # Calculate center and size of the bounding box
-        xc, yc = np.median(labels[:, :2], axis=0)
-        wb, hb = np.max(labels[:, 2:], axis=0)
+            if os.path.exists(label_path):
+                with open(label_path, "r") as lf:
+                    content = lf.read().strip()
+                    if content:  # File has content (bounding box)
+                        has_smoke = True
+                        # Parse YOLO format: class x_center y_center width height
+                        line = content.split('\n')[0].strip().split()
+                        if len(line) >= 5:
+                            labels.append(np.array(line[1:5], dtype=float))
+
+        # If we found any bounding boxes, compute median for cropping
+        if labels:
+            labels = np.stack(labels)
+            # Calculate center and size of the bounding box
+            xc, yc = np.median(labels[:, :2], axis=0)
+            wb, hb = np.max(labels[:, 2:], axis=0)
+        else:
+            # No bounding boxes found - use random crop for variety
+            # This helps the model see different regions that might be false positives
+            xc = random.uniform(0.25, 0.75)  # Random x center between 25% and 75%
+            yc = random.uniform(0.25, 0.75)  # Random y center between 25% and 75%
+            
+            # Vary the crop size too (between 30% and 60% of image)
+            crop_scale = random.uniform(0.3, 0.6)
+            wb, hb = crop_scale, crop_scale
 
         # Load frames and determine crop coordinates
         frames = [Image.open(f) for f in image_files]
         w, h = frames[0].size
-        crop_dim = max(wb * h, hb * h, self.img_size)
+        crop_dim = max(wb * w, hb * h, self.img_size)
         x0 = int(xc * w - crop_dim / 2)
         y0 = int(yc * h - crop_dim / 2)
         x1, y1 = x0 + crop_dim, y0 + crop_dim
+
+        # Bounds Checking
+        # Add bounds checking after computing x0, y0, x1, y1
+        x0 = max(0, x0)
+        y0 = max(0, y0)
+        x1 = min(w, x1)
+        y1 = min(h, y1)
+
+        # Ensure we have a valid crop region
+        if x1 <= x0 or y1 <= y0:
+            # Fall back to center crop if invalid
+            crop_dim = min(w, h, self.img_size)
+            x0 = (w - crop_dim) // 2
+            y0 = (h - crop_dim) // 2
+            x1 = x0 + crop_dim
+            y1 = y0 + crop_dim
+        # Bounds Checking
 
         # Crop, resize, and transform each frame
         processed = []
@@ -138,16 +177,16 @@ class FireSeriesDataset(Dataset):
             processed.append(resized)
 
         # Apply transformations
-        if custom_apply_transforms:
-            tensors = custom_apply_transforms(processed)
-        else:
-            tensors = apply_transform_list(processed, self.transform)
+        #if custom_apply_transforms:
+        #    tensors = custom_apply_transforms(processed)
+        #else:
+        tensors = apply_transform_list(processed, self.transform)
 
         # Stack into tensor shape (T, C, H, W)
         sequence_tensor = torch.stack(tensors)
 
         # Label extracted from parent folder name (assumes numeric)
-        label = int(os.path.basename(os.path.dirname(seq_path)))
+        label = int(has_smoke)
         return sequence_tensor, label
 
 
@@ -208,7 +247,7 @@ class FireClassifier(pl.LightningModule):
         self.save_hyperparameters()
 
         # Load pretrained ResNet50 and freeze its weights
-        resnet = models.resnet50(pretrained=True)
+        resnet = models.resnet50(weights='IMAGENET1K_V1')
         self.feature_extractor = nn.Sequential(*list(resnet.children())[:-1])
         for p in self.feature_extractor.parameters():
             p.requires_grad = False
@@ -280,6 +319,8 @@ def main():
     )
     parser.add_argument('--data_dir', type=str, required=True,
                         help='Root directory containing train/ and val/ subfolders')
+    parser.add_argument('--output_dir', type=str, default='./lightning_logs',
+                    help='Directory for saving checkpoints and logs')
     parser.add_argument('--batch_size', type=int, default=16,
                         help='Batch size for training and validation')
     parser.add_argument('--img_size', type=int, default=112,
@@ -309,7 +350,11 @@ def main():
 
     # Callbacks and logger
     checkpoint_cb = ModelCheckpoint(
-        monitor='val_acc', mode='max', save_top_k=1
+        dirpath=os.path.join(args.output_dir, 'checkpoints'),
+        filename='best-{epoch:02d}-{val_acc:.2f}',
+        monitor='val_acc',
+        mode='max', 
+        save_top_k=1
     )
     wandb_logger = WandbLogger(project=args.wandb_project)
 
