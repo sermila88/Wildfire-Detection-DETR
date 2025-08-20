@@ -84,9 +84,11 @@ class FireSeriesDataset(Dataset):
     across all frames in a folder, resized and normalized.
     """
 
-    def __init__(self, root_dir, img_size=112, transform=None):
+    def __init__(self, root_dir, img_size=112, transform=None, num_frames=16, min_frames=4):
         """
         Args:
+            num_frames: Fixed number of frames to sample (default 16)
+            min_frames: Skip sequences with fewer frames (default 4)
             root_dir (str): Path to the parent folder containing subfolders of image sequences.
             img_size (int): Size to which each cropped image will be resized.
             transform (callable, optional): A function/transform to apply to each frame.
@@ -94,11 +96,19 @@ class FireSeriesDataset(Dataset):
         self.root_dir = root_dir
         self.img_size = img_size
         self.transform = transform or DEFAULT_TRANSFORMS
+        self.num_frames = num_frames
+        self.min_frames = min_frames
 
-        # Get all video folders
-        self.sequence_paths = [d for d in glob.glob(os.path.join(root_dir, "*")) 
-                       if os.path.isdir(d)]
-        random.shuffle(self.sequence_paths)
+        # Get all video folders with enough frames
+        all_folders = [d for d in glob.glob(os.path.join(root_dir, "*")) 
+                    if os.path.isdir(d)]
+        self.sequence_paths = []
+        for folder in all_folders:
+            n_frames = len(glob.glob(os.path.join(folder, "*.jpg")))
+            if n_frames >= self.min_frames:  # Skip empty/too-short folders
+                self.sequence_paths.append(folder)
+        print(f"[{os.path.basename(root_dir)}] Using {len(self.sequence_paths)}/{len(all_folders)} sequences")
+        
 
     def __len__(self):
         return len(self.sequence_paths)
@@ -109,6 +119,20 @@ class FireSeriesDataset(Dataset):
         image_files = sorted(glob.glob(os.path.join(seq_path, "*.jpg")))
         if not image_files:
             raise FileNotFoundError(f"No .jpg files in {seq_path}")
+
+        # Temporal sampling: ensure fixed number of frames
+        if len(image_files) < self.num_frames:
+            # Repeat frames if too few
+            indices = []
+            while len(indices) < self.num_frames:
+                indices.extend(range(len(image_files)))
+            indices = indices[:self.num_frames]
+        else:
+            # Sample uniformly if too many
+            indices = np.linspace(0, len(image_files)-1, self.num_frames, dtype=int)
+
+        # Use sampled frames instead of all frames
+        image_files = [image_files[i] for i in indices]
 
         # Read all label files to compute median bounding box
         labels = []
@@ -195,21 +219,24 @@ class FireDataModule(pl.LightningDataModule):
     PyTorch Lightning DataModule for train/val/test splits.
     """
 
-    def __init__(self, data_dir, batch_size=16, img_size=112, num_workers=4):
+    def __init__(self, data_dir, batch_size=16, img_size=112, num_workers=4, num_frames=16):
         super().__init__()
         self.data_dir = data_dir
         self.batch_size = batch_size
         self.img_size = img_size
         self.num_workers = num_workers
+        self.num_frames = num_frames
 
     def setup(self, stage=None):
         self.train_dataset = FireSeriesDataset(
             os.path.join(self.data_dir, 'train'),
-            img_size=self.img_size
+            img_size=self.img_size,
+            num_frames=self.num_frames
         )
         self.val_dataset = FireSeriesDataset(
             os.path.join(self.data_dir, 'val'),
-            img_size=self.img_size
+            img_size=self.img_size,
+            num_frames=self.num_frames
         )
 
     def train_dataloader(self):
@@ -333,6 +360,8 @@ def main():
                         help='Maximum number of epochs to train')
     parser.add_argument('--wandb_project', type=str, default='fire_detection',
                         help='Weights & Biases project name')
+    parser.add_argument('--num_frames', type=int, default=16,
+                    help='Fixed number of frames to sample from each video')
     args = parser.parse_args()
 
     pl.seed_everything(42)
@@ -342,7 +371,8 @@ def main():
         data_dir=args.data_dir,
         batch_size=args.batch_size,
         img_size=args.img_size,
-        num_workers=args.num_workers
+        num_workers=args.num_workers,
+        num_frames=args.num_frames
     )
 
     # Initialize model
