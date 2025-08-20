@@ -95,9 +95,8 @@ class FireSeriesDataset(Dataset):
         self.img_size = img_size
         self.transform = transform or DEFAULT_TRANSFORMS
 
-        # Gather all sequence folders (not label folders)
-        self.sequence_paths = [d for d in glob.glob(os.path.join(root_dir, "*")) 
-                       if os.path.isdir(d) and not d.endswith('/labels')]
+        # Gather all sequence folders
+        self.sequence_paths = glob.glob(os.path.join(root_dir, "**"), recursive=True)
         random.shuffle(self.sequence_paths)
 
     def __len__(self):
@@ -108,40 +107,16 @@ class FireSeriesDataset(Dataset):
         seq_path = self.sequence_paths[idx]
         image_files = sorted(glob.glob(os.path.join(seq_path, "*.jpg")))
         if not image_files:
-            print(f"Warning: No .jpg files in {seq_path}, skipping...")
-            return self.__getitem__((idx + 1) % len(self))
+            raise FileNotFoundError(f"No .jpg files in {seq_path}")
 
         # Read all label files to compute median bounding box
-        # Skip frames without valid labels
         labels = []
-        valid_image_files = []
-        # Go through all images
         for img_path in image_files:
-
-            # Correct path: video/image.jpg → video/labels/image.txt
-            dir_path = os.path.dirname(img_path) # Get video folder
-            filename = os.path.basename(img_path).replace(".jpg", ".txt") # Get filename.txt
-            label_path = os.path.join(dir_path, "labels", filename) # video/labels/frame.txt
-            
-            # Check if label file exists
-            if os.path.exists(label_path):
-                with open(label_path, "r") as lf:
-                    content = lf.readline().strip()
-                    if content:  # Not empty file
-                        parts = content.split()
-                        if len(parts) >= 5:  # Has class_id + bbox
-                            bbox = parts[1:5]  # x_center, y_center, width, height
-                            # Append bbox to labels
-                            labels.append(np.array(bbox, dtype=float))
-                            valid_image_files.append(img_path)
-
-        # Only stack if we have labels
-        if labels:
-            labels = np.stack(labels)
-        else:
-            return self.__getitem__((idx + 1) % len(self)) # Else, skip to next sequence
-
-        image_files = valid_image_files
+            label_path = img_path.replace("images", "labels").replace(".jpg", ".txt")
+            with open(label_path, "r") as lf:
+                line = lf.readline().strip().split()[1:5]
+            labels.append(np.array(line, dtype=float))
+        labels = np.stack(labels)
 
         # Calculate center and size of the bounding box
         xc, yc = np.median(labels[:, :2], axis=0)
@@ -150,7 +125,7 @@ class FireSeriesDataset(Dataset):
         # Load frames and determine crop coordinates
         frames = [Image.open(f) for f in image_files]
         w, h = frames[0].size
-        crop_dim = max(wb * w, hb * h, self.img_size)
+        crop_dim = max(wb * h, hb * h, self.img_size)
         x0 = int(xc * w - crop_dim / 2)
         y0 = int(yc * h - crop_dim / 2)
         x1, y1 = x0 + crop_dim, y0 + crop_dim
@@ -171,9 +146,8 @@ class FireSeriesDataset(Dataset):
         # Stack into tensor shape (T, C, H, W)
         sequence_tensor = torch.stack(tensors)
 
-        #  If we have any valid bounding boxes = fire present (1)
-        # No boxes = no fire (0)
-        label = 1 if len(labels) > 0 else 0
+        # Label extracted from parent folder name (assumes numeric)
+        label = int(os.path.basename(os.path.dirname(seq_path)))
         return sequence_tensor, label
 
 
@@ -306,8 +280,6 @@ def main():
     )
     parser.add_argument('--data_dir', type=str, required=True,
                         help='Root directory containing train/ and val/ subfolders')
-    parser.add_argument('--output_dir', type=str, default='./lightning_logs',
-                    help='Directory for saving checkpoints and logs')
     parser.add_argument('--batch_size', type=int, default=16,
                         help='Batch size for training and validation')
     parser.add_argument('--img_size', type=int, default=112,
@@ -324,17 +296,6 @@ def main():
 
     pl.seed_everything(42)
 
-    if torch.cuda.is_available():
-        gpu_name = torch.cuda.get_device_name(0)
-        print(f"GPU: {gpu_name}")
-        print(f"GPU Memory: {torch.cuda.get_device_properties(0).total_memory / 1e9:.1f} GB")
-    else:
-        print("WARNING: No GPU detected!")
-
-    import time
-    start_time = time.time()
-    print(f"Training started at: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-
     # Prepare data
     dm = FireDataModule(
         data_dir=args.data_dir,
@@ -348,11 +309,7 @@ def main():
 
     # Callbacks and logger
     checkpoint_cb = ModelCheckpoint(
-        dirpath=os.path.join(args.output_dir, 'checkpoints'),
-        filename='best-{epoch:02d}-{val_acc:.3f}',
-        monitor='val_acc',
-        mode='max', 
-        save_top_k=1
+        monitor='val_acc', mode='max', save_top_k=1
     )
     wandb_logger = WandbLogger(project=args.wandb_project)
 
@@ -360,18 +317,12 @@ def main():
     trainer = pl.Trainer(
         max_epochs=args.max_epochs,
         callbacks=[checkpoint_cb],
-        logger=wandb_logger,
-        default_root_dir=args.output_dir
+        logger=wandb_logger
     )
 
     # Train
     trainer.fit(model, dm)
     wandb.finish()
-
-    end_time = time.time()
-    duration = (end_time - start_time) / 3600  # Convert to hours
-    print(f"Training completed at: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-    print(f"Total training time: {duration:.2f} hours")
 
 
 if __name__ == '__main__':
