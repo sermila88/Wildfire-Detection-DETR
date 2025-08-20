@@ -1,12 +1,11 @@
 #!/bin/bash
 #SBATCH --job-name=resnet_lstm_baseline_train
-#SBATCH --output=/vol/bitbucket/si324/rf-detr-wildfire/src/videos/train_outputs/ResNET_LSTM_baseline/logs/%x-%j.out
-#SBATCH --error=/vol/bitbucket/si324/rf-detr-wildfire/src/videos/train_outputs/ResNET_LSTM_baseline/logs/%x-%j.err
 #SBATCH --mem=32G
 #SBATCH --gres=gpu:1
-#SBATCH --partition=gpgpuB,gpgpu,AMD7-A100-T
 #SBATCH --mail-type=ALL 
 #SBATCH --mail-user=si324 
+#SBATCH --output=/vol/bitbucket/si324/rf-detr-wildfire/src/videos/train_outputs/ResNET_LSTM_baseline/logs/%x-%j.out
+#SBATCH --error=/vol/bitbucket/si324/rf-detr-wildfire/src/videos/train_outputs/ResNET_LSTM_baseline/logs/%x-%j.err
  
 export PATH=/vol/bitbucket/${USER}/rf-detr-wildfire/.venv/bin:$PATH
 export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
@@ -33,4 +32,5 @@ python src/videos/train/Baseline_LSTM/LSTM_baseline_train.py \
   --learning_rate 1e-5 \
   --max_epochs 50 \
   --wandb_project ResNET_LSTM_baseline \
-  --num_workers 8
+  --num_workers 8 \
+  --num_frames 16

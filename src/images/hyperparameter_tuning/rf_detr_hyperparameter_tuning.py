@@ -23,7 +23,9 @@ from tqdm import tqdm
 import gc
 import re
 import logging
+import wandb
 from scipy.ndimage import uniform_filter1d 
+
 
 class NumpyEncoder(json.JSONEncoder):
     def default(self, obj):
@@ -34,8 +36,6 @@ class NumpyEncoder(json.JSONEncoder):
         elif isinstance(obj, np.ndarray):
             return obj.tolist()
         return super(NumpyEncoder, self).default(obj)
-
-os.environ['PYTORCH_CUDA_ALLOC_CONF'] = 'expandable_segments:True'
 
 if torch.cuda.is_available():
     gpu_name = torch.cuda.get_device_name(0)
@@ -67,7 +67,7 @@ IOU_THRESHOLD = 0.1
 CONFIDENCE_THRESHOLDS = np.linspace(0.10, 0.90, 17)  # For threshold sweep
 
 # Training configuration
-N_TRIALS = 12
+N_TRIALS = 20
 EFFECTIVE_BATCH_SIZE = 16  # RF-DETR documentation
 
 # Create output directory
@@ -367,24 +367,15 @@ def objective(trial):
     """
     Optuna objective with smart threshold selection and comprehensive analysis
     """
-    # First suggest resolution
-    resolution = trial.suggest_categorical('resolution', [728, 896, 1120])
 
-    if resolution >= 1120:
-        batch_size = trial.suggest_categorical('batch_size', [2, 4])  
-    elif resolution >= 896:
-        batch_size = trial.suggest_categorical('batch_size', [4,8])  
-    else:  
-        batch_size = trial.suggest_categorical('batch_size', [8, 16])
-    
-    # Hyperparameters for wildfire smoke detection
+    # Hyperparameters 
     hp = {
-        'epochs': trial.suggest_int('epochs', 20, 40, step=5),
-        'batch_size': batch_size,
-        'lr': trial.suggest_float('lr', 5e-5, 2e-4, log=True),
-        'lr_encoder': trial.suggest_float('lr_encoder', 2e-6, 2e-5, log=True),
-        'resolution': resolution,
-        'weight_decay': trial.suggest_float('weight_decay', 5e-5, 3e-4, log=True),
+        'resolution': trial.suggest_categorical('resolution', [896, 1120]),
+        'batch_size': trial.suggest_categorical('batch_size', [4, 8, 16, 24]),
+        'epochs': trial.suggest_int('epochs', 20, 30, step=5),
+        'lr': trial.suggest_float('lr', 3e-5, 1.5e-4, log=True),
+        'lr_encoder': trial.suggest_float('lr_encoder', 5e-6, 3e-5, log=True),
+        'weight_decay': trial.suggest_float('weight_decay', 5e-5, 2e-4, log=True),
         'gradient_checkpointing': False,
         'use_ema': True,
     }
@@ -425,43 +416,28 @@ def objective(trial):
         print(f"  Training for {hp['epochs']} epochs...")
         train_start = time.time()
 
-        max_oom_adapts = 4
-        attempt = 0
-        while True:
-            try:
-                model.train(
-                    dataset_dir=DATASET_DIR,
-                    output_dir=os.path.join(trial_dir, "checkpoints"),
-                    epochs=hp['epochs'],
-                    batch_size=hp['batch_size'],
-                    grad_accum_steps=hp['grad_accum_steps'],
-                    lr=hp['lr'],
-                    lr_encoder=hp['lr_encoder'],
-                    resolution=hp['resolution'],
-                    weight_decay=hp['weight_decay'],
-                    gradient_checkpointing=hp['gradient_checkpointing'],
-                    use_ema=hp['use_ema'],
-                    device="cuda",
-                    use_amp=True,
-                    ddp=False,
-                    early_stopping=True,
-                    early_stopping_patience=8,
-                    early_stopping_min_delta=0.001,
-                    early_stopping_use_ema=True,
-                    tensorboard=False,
-                    wandb=False
-                )
-                break  # Success
-                
-            except RuntimeError as e:
-                msg = str(e).lower()
-                if "out of memory" not in msg and "cuda out of memory" not in msg:
-                    raise  # Not memory issue
-                
-                # Simple fallback for A30
-                torch.cuda.empty_cache()
-                print(" CUDA OOM - Pruning trial")
-                raise optuna.TrialPruned()  # Prune trial
+        model.train(
+            dataset_dir=DATASET_DIR,
+            output_dir=os.path.join(trial_dir, "checkpoints"),
+            epochs=hp['epochs'],
+            batch_size=hp['batch_size'],
+            grad_accum_steps=hp['grad_accum_steps'],
+            lr=hp['lr'],
+            lr_encoder=hp['lr_encoder'],
+            resolution=hp['resolution'],
+            weight_decay=hp['weight_decay'],
+            gradient_checkpointing=hp['gradient_checkpointing'],
+            use_ema=hp['use_ema'],
+            device="cuda",
+            use_amp=True,
+            ddp=False,
+            early_stopping=True,
+            early_stopping_patience=5,
+            early_stopping_min_delta=0.001,
+            early_stopping_use_ema=True,
+            tensorboard=False,
+            wandb=True
+        )
 
         train_time = time.time() - train_start
         print(f" Training complete in {train_time/3600:.1f} hours")
@@ -488,7 +464,9 @@ def objective(trial):
         
         print(f"  Best F1: {best_result['f1_score']:.4f} @ confidence={best_result['confidence']:.1f}")
         print(f"  Precision: {best_result['precision']:.4f}, Recall: {best_result['recall']:.4f}")
-        
+
+        trial_time = time.time() - trial_start
+
         # Plot threshold analysis
         plot_threshold_analysis(trial_dir, all_threshold_results, best_result)
         
@@ -498,8 +476,6 @@ def objective(trial):
         torch.cuda.empty_cache()
         gc.collect()
         
-        # Calculate total trial time
-        trial_time = time.time() - trial_start
         
         # Save comprehensive results
         results = {

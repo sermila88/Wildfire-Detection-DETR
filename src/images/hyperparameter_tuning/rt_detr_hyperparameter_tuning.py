@@ -532,7 +532,7 @@ def main():
         return study.best_params
         
     except KeyboardInterrupt:
-        print(f"\n⚠️ Optimization interrupted by user")
+        print(f"\n Optimization interrupted by keyboard")
         print(f"💾 Current results saved to: {OUTPUT_DIR}/")
         
         # Save interrupted state with full context

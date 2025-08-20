@@ -35,6 +35,7 @@ from torchmetrics import Accuracy, Precision, Recall
 import wandb
 from pytorch_lightning.loggers import WandbLogger
 import torchvision.transforms as T
+import time
 # from custom_tf import apply_transform_list
 
 # Optional: set this if debugging CUDA launches
@@ -108,7 +109,7 @@ class FireSeriesDataset(Dataset):
             if n_frames >= self.min_frames:  # Skip empty/too-short folders
                 self.sequence_paths.append(folder)
         print(f"[{os.path.basename(root_dir)}] Using {len(self.sequence_paths)}/{len(all_folders)} sequences")
-        
+
 
     def __len__(self):
         return len(self.sequence_paths)
@@ -364,6 +365,11 @@ def main():
                     help='Fixed number of frames to sample from each video')
     args = parser.parse_args()
 
+    # Print GPU info and start timer
+    if torch.cuda.is_available():
+        print(f"\n🔥 Training on: {torch.cuda.get_device_name(0)}")
+    start_time = time.time()
+
     pl.seed_everything(42)
 
     # Prepare data
@@ -397,6 +403,9 @@ def main():
 
     # Train
     trainer.fit(model, dm)
+
+    print(f"\n✅ Training complete in {(time.time() - start_time)/60:.1f} minutes")
+    
     wandb.finish()
 
 
