@@ -2,24 +2,42 @@ import optuna
 import os
 import json
 import shutil
-import pickle
+import time
+import numpy as np
+import matplotlib.pyplot as plt
+import matplotlib
+matplotlib.use('Agg')
 from datetime import datetime
 from pathlib import Path
 from ultralytics import RTDETR
 import torch
-from ultralytics.utils.metrics import bbox_iou
+import supervision as sv
+from PIL import Image
+from tqdm import tqdm
+import gc
+import pandas as pd
+from scipy.ndimage import uniform_filter1d
+import wandb
 
 # Set cache directory for Ultralytics models to prevent downloads to project root
-cache_dir = Path.home() / ".ultralytics_cache"  # type: ignore
+cache_dir = Path.home() / ".ultralytics_cache"  
 cache_dir.mkdir(exist_ok=True)
-os.environ['ULTRALYTICS_CACHE_DIR'] = str(cache_dir)  # type: ignore
+os.environ['ULTRALYTICS_CACHE_DIR'] = str(cache_dir)  
+
+# Enable TF32 for faster training
+torch.backends.cudnn.benchmark = True
+torch.backends.cuda.matmul.allow_tf32 = True
+torch.backends.cudnn.allow_tf32 = True
 
 # Config - Following official RT-DETR standards
-EXPERIMENT_NAME = "rtdetr_hyperparameter_tuning_v1"
-DATASET_PATH = "/vol/bitbucket/si324/rf-detr-wildfire/data/pyro25img"
-OUTPUT_DIR = f"/vol/bitbucket/si324/rf-detr-wildfire/outputs/{EXPERIMENT_NAME}"
+EXPERIMENT_NAME = "RT-DETR_hyperparameter_tuning"
+PROJECT_ROOT = "/vol/bitbucket/si324/rf-detr-wildfire"
+DATASET_PATH = f"{PROJECT_ROOT}/src/images/data/pyro25img/images"
+OUTPUT_DIR = f"{PROJECT_ROOT}/src/images/outputs/{EXPERIMENT_NAME}"
 
-os.makedirs(OUTPUT_DIR, exist_ok=True)
+# Validation setup (same as RF-DETR)
+VALIDATION_DIR = f"{DATASET_PATH}/images/valid"
+VALIDATION_ANNOTATIONS = f"{VALIDATION_DIR}/_annotations.coco.json"
 
 class Logger:
     """Comprehensive logging for RT-DETR hyperparameter tuning with full resumability."""

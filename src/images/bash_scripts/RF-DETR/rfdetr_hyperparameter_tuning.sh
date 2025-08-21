@@ -17,7 +17,7 @@ export PATH=/vol/bitbucket/${USER}/rf-detr-wildfire/.venv/bin:$PATH
 source /vol/bitbucket/${USER}/rf-detr-wildfire/.venv/bin/activate
 source /vol/cuda/12.0.0/setup.sh
 /usr/bin/nvidia-smi
-echo "🎮 GPU Model: $(nvidia-smi --query-gpu=name --format=csv,noheader | head -n 1)"
+echo " GPU Model: $(nvidia-smi --query-gpu=name --format=csv,noheader | head -n 1)"
 
 # Move to project directory
 cd /vol/bitbucket/${USER}/rf-detr-wildfire

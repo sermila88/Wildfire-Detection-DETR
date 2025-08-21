@@ -5,6 +5,8 @@ RF-DETR Training Script for Wildfire Smoke Detection from Roboflow
 from rfdetr.detr import RFDETRBase
 import torch
 import os
+import time
+start_time = time.time()
 
 os.environ["RANK"] = "0"
 os.environ["WORLD_SIZE"] = "1"
@@ -16,17 +18,17 @@ os.environ["LOCAL_RANK"] = "0"
 # EXPERIMENT CONFIGURATION
 # ============================================================================
 # Modify this  for different experiments
-EXPERIMENT_NAME = "rfdetr_smoke_detection_v1_1120_high_res"  # Change this for different experiments
+EXPERIMENT_NAME = "RF-DETR_initial_training"  # Change this for different experiments
 
 # Dataset path (COCO format)
-dataset_path = "/vol/bitbucket/si324/rf-detr-wildfire/data/pyro25img/images"
+dataset_path = "/vol/bitbucket/si324/rf-detr-wildfire/src/images/data/pyro25img/images"
 
 # ============================================================================
 # OUTPUT DIRECTORY SETUP
 # ============================================================================
 # Create organized output structure
 project_root = "/vol/bitbucket/si324/rf-detr-wildfire"
-outputs_root = os.path.join(project_root, "outputs")
+outputs_root = os.path.join(project_root, "src/images/outputs")
 experiment_dir = os.path.join(outputs_root, EXPERIMENT_NAME)
 
 # Create subdirectories for organized output
@@ -59,12 +61,12 @@ model = RFDETRBase(resolution=1120)
 print(f"\n🚀 Starting training...")
 model.train(
     dataset_dir=dataset_path,
-    epochs=30,
+    epochs=50,
     batch_size=4,           
     grad_accum_steps=16,     
     lr=1e-4,
     device="cuda",      
-    use_amp=True,  # Mixed precision 
+    use_amp=True, # Mixed precision 
     ddp=False,
     output_dir=checkpoints_dir  
 )
@@ -72,3 +74,13 @@ model.train(
 print(f"\n Training completed")
 print(f" Checkpoints saved to: {checkpoints_dir}")
 print(f" To evaluate, use experiment name: {EXPERIMENT_NAME}")
+
+# Log training time
+end_time = time.time()
+duration = end_time - start_time
+hours = int(duration // 3600)
+minutes = int((duration % 3600) // 60)
+seconds = int(duration % 60)
+
+print(f"\n Training Duration: {hours}h {minutes}m {seconds}s")
+print(f" Finished at: {time.strftime('%Y-%m-%d %H:%M:%S')}")

@@ -16,8 +16,8 @@ os.environ['ULTRALYTICS_CACHE_DIR'] = str(cache_dir)
 # ============================================================================
 # EXPERIMENT CONFIGURATION  
 # ============================================================================
-EXPERIMENT_NAME = "rtdetr_smoke_detection_v1"
-DATASET_PATH = "/vol/bitbucket/si324/rf-detr-wildfire/data/pyro25img"
+EXPERIMENT_NAME = "RT-DETR_initial_training"
+DATASET_PATH = "/vol/bitbucket/si324/rf-detr-wildfire/src/images/data/pyro25img/images"
 
 # Directory structure
 project_root = "/vol/bitbucket/si324/rf-detr-wildfire"
@@ -44,8 +44,7 @@ def main():
     os.makedirs(eval_results_dir, exist_ok=True)
     
     # Load RT-DETR model (pre-trained on COCO)
-    # RT-DETR-X: Higher accuracy (54.8 mAP) better for tiny smoke detection
-    # Alternative: "rtdetr-l.pt" (53.1 mAP, faster), "rtdetr-x.pt" (54.8 mAP, better accuracy)
+    # RT-DETR-X: Higher accuracy (54.8 mAP) better for small smoke detection
     
     # Change to checkpoints directory so downloaded models go there
     original_dir = os.getcwd()
