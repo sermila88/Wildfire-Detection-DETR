@@ -64,10 +64,10 @@ OUTPUT_DIR = f"{PROJECT_ROOT}/src/images/outputs/{EXPERIMENT_NAME}"
 
 # Evaluation parameters
 IOU_THRESHOLD = 0.1  
-CONFIDENCE_THRESHOLDS = np.linspace(0.10, 0.90, 17)  # For threshold sweep
+CONFIDENCE_THRESHOLDS = np.round(np.linspace(0.10, 0.90, 17), 2)  # For threshold sweep
 
 # Training configuration
-N_TRIALS = 20
+N_TRIALS = 25
 EFFECTIVE_BATCH_SIZE = 16  # RF-DETR documentation
 
 # Create output directory
@@ -367,10 +367,9 @@ def objective(trial):
     """
     Optuna objective with smart threshold selection and comprehensive analysis
     """
-
     # Hyperparameters 
     hp = {
-        'resolution': trial.suggest_categorical('resolution', [896, 1120]),
+        'resolution': trial.suggest_categorical('resolution', [728, 896, 1120]),
         'batch_size': trial.suggest_categorical('batch_size', [4, 8, 16, 24]),
         'epochs': trial.suggest_int('epochs', 20, 30, step=5),
         'lr': trial.suggest_float('lr', 3e-5, 1.5e-4, log=True),
@@ -465,6 +464,10 @@ def objective(trial):
         print(f"  Best F1: {best_result['f1_score']:.4f} @ confidence={best_result['confidence']:.1f}")
         print(f"  Precision: {best_result['precision']:.4f}, Recall: {best_result['recall']:.4f}")
 
+        # Clean up distributed process group if initialized 
+        if torch.distributed.is_initialized():
+            torch.distributed.destroy_process_group()
+
         trial_time = time.time() - trial_start
 
         # Plot threshold analysis
@@ -516,7 +519,7 @@ def objective(trial):
                 f.write(f"  Final loss: {training_metrics['train_loss'][-1]:.4f}\n")
                 f.write(f"  Min loss: {min(training_metrics['train_loss']):.4f}\n")
             
-            f.write(f"\nOBJECT-LEVEL RESULTS (Optimization Target):\n")
+            f.write(f"\nFINAL RESULTS:\n")
             f.write(f"  Best F1 Score: {best_result['f1_score']:.4f} \n")
             f.write(f"  Best Confidence: {best_result['confidence']:.1f}\n")
             f.write(f"  Precision: {best_result['precision']:.4f}\n")
@@ -530,6 +533,10 @@ def objective(trial):
         
         logging.info(f"Trial {trial.number}: F1={best_result['f1_score']:.4f} @ conf={best_result['confidence']:.1f}")
 
+        # Clean up distributed process group
+        if torch.distributed.is_initialized():
+            torch.distributed.destroy_process_group()
+        
         return best_result['f1_score']  # RETURN BEST F1 
         
     except Exception as e:
@@ -550,152 +557,6 @@ def objective(trial):
         gc.collect()              
         
         raise optuna.TrialPruned()
-
-# ============================================================================
-# OPTIMIZATION SUMMARY PLOTS
-# ============================================================================
-def create_optimization_summary(study, output_dir):
-    """Create comprehensive optimization summary plots"""
-    
-    trials = [t for t in study.trials if t.value is not None]
-    if len(trials) < 2:
-        return
-    
-    fig = plt.figure(figsize=(20, 12))
-    gs = fig.add_gridspec(3, 3, hspace=0.3, wspace=0.3)
-    
-    # Extract data
-    trial_nums = [t.number for t in trials]
-    f1_scores = [t.value for t in trials]
-    resolutions = [t.params.get('resolution', 0) for t in trials]
-    lrs = [t.params.get('lr', 0) for t in trials]
-    batch_sizes = [t.params.get('batch_size', 0) for t in trials]
-    
-    # 1. F1 Scores by Trial
-    ax1 = fig.add_subplot(gs[0, 0])
-    colors = ['red' if t.number == study.best_trial.number else 'blue' for t in trials]
-    ax1.bar(trial_nums, f1_scores, color=colors)
-    ax1.axhline(y=max(f1_scores), color='r', linestyle='--', alpha=0.3)
-    ax1.set_xlabel('Trial Number')
-    ax1.set_ylabel('Object-Level F1 Score')
-    ax1.set_title('F1 Scores by Trial', fontsize=12, weight='bold')
-    ax1.grid(True, alpha=0.3, axis='y')
-    
-    # 2. F1 vs Resolution
-    ax2 = fig.add_subplot(gs[0, 1])
-    ax2.scatter(resolutions, f1_scores, s=150, alpha=0.7, c=colors)
-    ax2.set_xlabel('Resolution (pixels)')
-    ax2.set_ylabel('Object-Level F1 Score')
-    ax2.set_title('F1 Score vs Resolution', fontsize=12, weight='bold')
-    ax2.grid(True, alpha=0.3)
-    
-    # 3. F1 vs Learning Rate
-    ax3 = fig.add_subplot(gs[0, 2])
-    ax3.scatter(lrs, f1_scores, s=150, alpha=0.7, c=colors)
-    ax3.set_xlabel('Learning Rate')
-    ax3.set_ylabel('Object-Level F1 Score')
-    ax3.set_xscale('log')
-    ax3.set_title('F1 Score vs Learning Rate', fontsize=12, weight='bold')
-    ax3.grid(True, alpha=0.3)
-    
-    # 4. F1 vs Batch Size
-    ax4 = fig.add_subplot(gs[1, 0])
-    for bs in set(batch_sizes):
-        bs_f1s = [f1 for f1, b in zip(f1_scores, batch_sizes) if b == bs]
-        ax4.scatter([bs]*len(bs_f1s), bs_f1s, s=100, alpha=0.7, label=f'BS={bs}')
-    ax4.set_xlabel('Batch Size')
-    ax4.set_ylabel('Object-Level F1 Score')
-    ax4.set_title('F1 Score vs Batch Size', fontsize=12, weight='bold')
-    ax4.legend()
-    ax4.grid(True, alpha=0.3)
-    
-    # 5. Optimization History
-    ax5 = fig.add_subplot(gs[1, 1])
-    ax5.plot(trial_nums, f1_scores, 'b-', marker='o', markersize=8, linewidth=2)
-    ax5.scatter(study.best_trial.number, study.best_trial.value, 
-               color='red', s=200, marker='*', zorder=5)
-    ax5.set_xlabel('Trial Number')
-    ax5.set_ylabel('Object-Level F1 Score')
-    ax5.set_title('Optimization Progress', fontsize=12, weight='bold')
-    ax5.grid(True, alpha=0.3)
-    
-    # 6. Parameter Importance
-    ax6 = fig.add_subplot(gs[1, 2])
-    if len(trials) >= 5:
-        try:
-            importance = optuna.importance.get_param_importances(study)
-            params = list(importance.keys())
-            values = list(importance.values())
-            ax6.barh(params, values, color='teal')
-            ax6.set_xlabel('Importance')
-            ax6.set_title('Hyperparameter Importance', fontsize=12, weight='bold')
-        except:
-            ax6.text(0.5, 0.5, 'Not enough trials', ha='center', va='center')
-    else:
-        ax6.text(0.5, 0.5, f'Need ≥5 trials\n(have {len(trials)})', ha='center', va='center')
-    
-    # 7. Best Confidence Thresholds
-    ax7 = fig.add_subplot(gs[2, 0])
-    best_confs = []
-    for t in trials:
-        try:
-            results_file = os.path.join(output_dir, f"trial_{t.number:03d}", "results.json")
-            if os.path.exists(results_file):
-                with open(results_file, 'r') as f:
-                    data = json.load(f)
-                    best_confs.append(data['best_result']['confidence'])
-        except:
-            pass
-    
-    if best_confs:
-        ax7.hist(best_confs, bins=8, color='green', alpha=0.7, edgecolor='black')
-        ax7.set_xlabel('Best Confidence Threshold')
-        ax7.set_ylabel('Count')
-        ax7.set_title('Distribution of Best Thresholds', fontsize=12, weight='bold')
-        ax7.grid(True, alpha=0.3, axis='y')
-    
-    # 8. Trial Duration
-    ax8 = fig.add_subplot(gs[2, 1])
-    durations = []
-    for t in trials:
-        try:
-            results_file = os.path.join(output_dir, f"trial_{t.number:03d}", "results.json")
-            if os.path.exists(results_file):
-                with open(results_file, 'r') as f:
-                    data = json.load(f)
-                    durations.append(data.get('total_trial_time_hours', 0))
-        except:
-            durations.append(0)
-    
-    if durations:
-        ax8.bar(trial_nums, durations, color='purple', alpha=0.7)
-        ax8.set_xlabel('Trial Number')
-        ax8.set_ylabel('Duration (hours)')
-        ax8.set_title('Trial Duration', fontsize=12, weight='bold')
-        ax8.grid(True, alpha=0.3, axis='y')
-    
-    # 9. Best Trial Summary
-    ax9 = fig.add_subplot(gs[2, 2])
-    ax9.axis('off')
-    
-    summary_text = "BEST TRIAL SUMMARY\n" + "="*25 + "\n\n"
-    summary_text += f"Trial Number: {study.best_trial.number}\n"
-    summary_text += f"F1 Score: {study.best_trial.value:.4f}\n\n"
-    summary_text += "Parameters:\n"
-    for param, value in study.best_trial.params.items():
-        if isinstance(value, float):
-            summary_text += f"  {param}: {value:.2e}\n"
-        else:
-            summary_text += f"  {param}: {value}\n"
-    
-    ax9.text(0.1, 0.9, summary_text, transform=ax9.transAxes,
-            fontsize=10, verticalalignment='top', family='monospace')
-    
-    fig.suptitle(f'{EXPERIMENT_NAME} Summary - Best F1: {study.best_trial.value:.4f}',
-                fontsize=16, weight='bold')
-    
-    plt.savefig(os.path.join(output_dir, 'optimization_summary.png'), dpi=150, bbox_inches='tight')
-    plt.close()
 
 # ============================================================================
 # MAIN EXECUTION
@@ -768,9 +629,6 @@ def main():
             else:
                 print(f"   {param}: {value}")
         
-        # Create comprehensive summary
-        create_optimization_summary(study, OUTPUT_DIR)
-        
         # Save final summary
         summary = {
             "best_trial": best_trial.number,
@@ -787,11 +645,6 @@ def main():
             json.dump(summary, f, indent=2, cls=NumpyEncoder)
         
         print(f"\n💾 All results saved to: {OUTPUT_DIR}")
-        print("\n✅ Next step: Evaluate on TEST set:")
-        print(f"   python rfdetr_hyperparameter_tuning_eval.py \\")
-        print(f"     --checkpoint {OUTPUT_DIR}/trial_{best_trial.number:03d}/checkpoints/checkpoint_best_ema.pth \\")
-        print(f"     --resolution {best_trial.params['resolution']} \\")
-        print(f"     --experiment_name {EXPERIMENT_NAME}_best_TEST_eval")
         
     except KeyboardInterrupt:
         print("\n⚠️  Optimization interrupted")

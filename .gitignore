@@ -18,7 +18,6 @@ model_preds/
 train_outputs/
 FINAL_GT_BREAKDOWN/
 
-
 # SLURM job outputs
 *.out
 *.err
