@@ -7,6 +7,7 @@ import os
 import torch
 from pathlib import Path
 from ultralytics import RTDETR
+import wandb
 
 # Set cache directory for Ultralytics models to prevent downloads to project root
 cache_dir = Path.home() / ".ultralytics_cache"
@@ -21,7 +22,7 @@ DATASET_PATH = "/vol/bitbucket/si324/rf-detr-wildfire/src/images/data/pyro25img/
 
 # Directory structure
 project_root = "/vol/bitbucket/si324/rf-detr-wildfire"
-outputs_root = os.path.join(project_root, "outputs")
+outputs_root = os.path.join(project_root, "src/images/outputs")
 experiment_dir = os.path.join(outputs_root, EXPERIMENT_NAME)
 checkpoints_dir = os.path.join(experiment_dir, "checkpoints")
 plots_dir = os.path.join(experiment_dir, "plots")
@@ -45,12 +46,26 @@ def main():
     
     # Load RT-DETR model (pre-trained on COCO)
     # RT-DETR-X: Higher accuracy (54.8 mAP) better for small smoke detection
+
+    # Initialize W&B 
+    wandb.init(
+        project="RT-DETR_initial_training",
+        name=EXPERIMENT_NAME,
+        config={
+            "epochs": 50,
+            "batch_size": 4,
+            "learning_rate": 0.0005,
+            "architecture": "RT-DETR-X",
+            "dataset": "pyro25img",
+            "resolution": 728,
+        }
+    )
     
     # Change to checkpoints directory so downloaded models go there
     original_dir = os.getcwd()
     os.chdir(checkpoints_dir)
     
-    model = RTDETR("rtdetr-x.pt")  # RT-DETR-X for best accuracy on tiny objects
+    model = RTDETR("rtdetr-x.pt")  # RT-DETR-X for best accuracy on small objects
     
     # Change back to original directory
     os.chdir(original_dir)
@@ -61,38 +76,28 @@ def main():
     # Train the model - ultralytics can handle COCO format directly
     results = model.train(
         data=f"{DATASET_PATH}/data.yaml",
-        epochs=100,
-        imgsz=896,         
-        batch=4,          
-        lr0=0.0001,        
-        patience=15,       
-        save_period=10,    
+        epochs=50,
+        imgsz=728,         
+        batch=8,          
+        lr0=0.0005,        
+        patience=20,       
+        save_period=-1,    
         project=experiment_dir,
         name="checkpoints",
         exist_ok=True,
         verbose=True,
         device="cuda",
-        amp=True,          
-        freeze=None,       
+        amp=True,             
         optimizer="AdamW", 
         cos_lr=True,      
         warmup_epochs=3,  
-        box=7.5,           
-        cls=0.5,         
-        dfl=1.5,          
     )
     
-    print(f"✅ RT-DETR training completed!")
-    print(f"📁 Checkpoints saved to: {checkpoints_dir}/")
-    print(f"💾 Best model: {checkpoints_dir}/weights/best.pt")
-    print(f"📊 Training plots: {checkpoints_dir}/results.png")
+    print(f"RT-DETR training completed!")
+    print(f"Checkpoints saved to: {checkpoints_dir}/")
+    print(f"Best model: {checkpoints_dir}/weights/best.pt")
+    print(f"Training plots: {checkpoints_dir}/results.png")
     
-    # Print final metrics
-    if results and hasattr(results, 'results_dict'):
-        metrics = results.results_dict
-        print(f"\n📈 Final Training Metrics:")
-        print(f"   mAP50: {metrics.get('metrics/mAP50(B)', 'N/A'):.3f}")
-        print(f"   mAP50-95: {metrics.get('metrics/mAP50-95(B)', 'N/A'):.3f}")
     
     return results
 

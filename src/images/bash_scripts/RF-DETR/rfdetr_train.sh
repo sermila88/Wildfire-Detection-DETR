@@ -1,6 +1,6 @@
 #!/bin/bash
 #SBATCH --job-name=RF-DETR_initial_training
-#SBATCH --partition=gpgpu,gpgpuB,AMD7-A100-T
+#SBATCH --partition=gpgpu,AMD7-A100-T
 #SBATCH --gres=gpu:1                  
 #SBATCH --mem=32G                           
 #SBATCH --mail-type=ALL               

@@ -55,7 +55,7 @@ print(f"  └── eval_results/  → {eval_results_dir}")
 # ============================================================================
 # Clear GPU memory and initialize model  
 torch.cuda.empty_cache()
-model = RFDETRBase(resolution=1120)
+model = RFDETRBase(resolution=728)
 
 # Train the model with outputs going to checkpoints directory
 print(f"\n🚀 Starting training...")
@@ -68,7 +68,10 @@ model.train(
     device="cuda",      
     use_amp=True, # Mixed precision 
     ddp=False,
-    output_dir=checkpoints_dir  
+    output_dir=checkpoints_dir,
+    wandb=True,
+    project="RF-DETR_initial_train",
+    name=EXPERIMENT_NAME
 )
 
 print(f"\n Training completed")
