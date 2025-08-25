@@ -17,6 +17,7 @@ old_img_repo/
 model_preds/
 train_outputs/
 FINAL_GT_BREAKDOWN/
+Ground_truth_BB/
 
 # SLURM job outputs
 *.out

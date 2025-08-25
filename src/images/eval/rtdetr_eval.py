@@ -17,15 +17,15 @@ from datetime import datetime
 # ============================================================================
 # CONFIGURATION
 # ============================================================================
-EXPERIMENT_NAME = "rtdetr_smoke_detection_v1_IoU=0.01"
+EXPERIMENT_NAME = "RT-DETR_initial_training"
 PROJECT_ROOT = "/vol/bitbucket/si324/rf-detr-wildfire"
 
 # Dataset paths
-DATASET_PATH = f"{PROJECT_ROOT}/data/pyro25img/images/test"
+DATASET_PATH = f"{PROJECT_ROOT}/src/images/data/pyro25img/images/test"
 ANNOTATIONS_PATH = f"{DATASET_PATH}/_annotations.coco.json"
 
 # Output paths
-EXPERIMENT_DIR = f"{PROJECT_ROOT}/outputs/{EXPERIMENT_NAME}"
+EXPERIMENT_DIR = f"{PROJECT_ROOT}/src/images/outputs/{EXPERIMENT_NAME}"
 CHECKPOINTS_DIR = f"{EXPERIMENT_DIR}/checkpoints/weights"
 EVAL_RESULTS_DIR = f"{EXPERIMENT_DIR}/eval_results"
 PLOTS_DIR = f"{EXPERIMENT_DIR}/plots"
@@ -108,7 +108,7 @@ def save_predictions_yolo_format(preds, output_path, img_width, img_height):
 
 def load_yolo_baseline():
     """Load YOLO baseline (image + object level) from saved summary JSON."""
-    path = f"{PROJECT_ROOT}/outputs/yolo_baseline_v1_IoU=0.01/eval_results/summary_results.json"
+    path = f"{PROJECT_ROOT}/src/images/outputs/yolo_baseline_v1_IoU=0.1/eval_results/summary_results.json"
     try:
         with open(path, "r") as f:
             data = json.load(f)

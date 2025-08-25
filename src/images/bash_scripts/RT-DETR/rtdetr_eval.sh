@@ -3,15 +3,19 @@
 #SBATCH --mem=32G
 #SBATCH --mail-type=ALL 
 #SBATCH --mail-user=si324 
-#SBATCH --output=/vol/bitbucket/${USER}/rf-detr-wildfire/outputs/rtdetr_smoke_detection_v1_IoU=0.01/logs/rtdetr_eval_%j.out
-#SBATCH --error=/vol/bitbucket/${USER}/rf-detr-wildfire/outputs/rtdetr_smoke_detection_v1_IoU=0.01/logs/rtdetr_eval_%j.err
-
+#SBATCH --output=/vol/bitbucket/si324/rf-detr-wildfire/src/images/outputs/RT-DETR_initial_training/logs/RT-DETR_eval-%j.out
+#SBATCH --error=/vol/bitbucket/si324/rf-detr-wildfire/src/images/outputs/RT-DETR_initial_training/logs/RT-DETR_eval-%j.err
  
 export PATH=/vol/bitbucket/${USER}/rf-detr-wildfire/.venv/bin:$PATH
 source /vol/bitbucket/${USER}/rf-detr-wildfire/.venv/bin/activate
 source /vol/cuda/12.0.0/setup.sh
 /usr/bin/nvidia-smi
 
-# Go to the project folder and run the RT-DETR evaluation script
+# Go to the project folder and run the training script
 cd /vol/bitbucket/${USER}/rf-detr-wildfire
-python eval/rtdetr_eval.py 
+
+# Create logs directory if it doesn't exist
+mkdir -p /vol/bitbucket/${USER}/rf-detr-wildfire/src/images/outputs/RT-DETR_initial_training/logs
+
+
+python src/images/eval/rtdetr_eval.py

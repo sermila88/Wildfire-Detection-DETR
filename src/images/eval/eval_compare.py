@@ -1,0 +1,639 @@
+import glob
+import os
+from utils import xywh2xyxy, box_iou
+import numpy as np
+import matplotlib.pyplot as plt
+import pandas as pd
+import subprocess
+import json
+from datetime import datetime
+from PIL import Image
+import cv2
+from tqdm import tqdm
+import supervision as sv
+import shutil
+
+# Configuration
+OUTPUT_BASE_DIR = "/vol/bitbucket/si324/rf-detr-wildfire/src/images/eval_results"
+TEST_IMAGES_DIR = "/vol/bitbucket/si324/rf-detr-wildfire/src/images/data/pyro25img/images/test"
+GT_FOLDER = "/vol/bitbucket/si324/rf-detr-wildfire/src/images/data/pyro25img/labels/test"
+
+def generate_yolo_predictions(model_path, output_dir):
+    """Generate YOLO predictions ONCE at conf=0.01 same as baseline"""
+    cmd = f"yolo predict model={model_path} iou=0.01 conf=0.01 source={TEST_IMAGES_DIR} save=False save_txt save_conf project={output_dir} name=predictions"
+    print(f"Running: {cmd}")
+    subprocess.call(cmd, shell=True)
+    return os.path.join(output_dir, "predictions", "labels")
+
+def load_models(model_type, model_path):
+    """Load model once"""
+    if model_type == "RF-DETR":
+        import sys
+        sys.path.append('/vol/bitbucket/si324/rf-detr-wildfire/src/images')
+        from rfdetr import RFDETRBase
+        print(f"Loading RF-DETR from: {model_path}")
+        return RFDETRBase(pretrain_weights=model_path, num_classes=1)
+    elif model_type == "RT-DETR":
+        from ultralytics import RTDETR
+        print(f"Loading RT-DETR from: {model_path}")
+        return RTDETR(model_path)
+    return None
+
+def generate_rfdetr_predictions(model, image_path, conf_threshold):
+    """Generate RF-DETR predictions"""
+    with Image.open(image_path) as img:
+        img_rgb = img.convert("RGB")
+        predictions = model.predict(img_rgb, threshold=conf_threshold)
+    
+    # Convert to YOLO format
+    img_width, img_height = img_rgb.size
+    yolo_lines = []
+    
+    if hasattr(predictions, 'xyxy') and len(predictions.xyxy) > 0:
+        for i, box in enumerate(predictions.xyxy):
+            x1, y1, x2, y2 = box
+            x_center = ((x1 + x2) / 2) / img_width
+            y_center = ((y1 + y2) / 2) / img_height
+            width = (x2 - x1) / img_width
+            height = (y2 - y1) / img_height
+            conf = predictions.confidence[i] if hasattr(predictions, 'confidence') else 1.0
+            yolo_lines.append(f"0 {x_center:.6f} {y_center:.6f} {width:.6f} {height:.6f} {conf:.6f}")
+    
+    return yolo_lines
+
+def generate_rtdetr_predictions(model, image_path, conf_threshold):
+    """Generate RT-DETR predictions"""
+    with Image.open(image_path) as img:
+        img_rgb = img.convert("RGB")
+        results = model.predict(source=img_rgb, conf=conf_threshold, verbose=False)
+        predictions = sv.Detections.from_ultralytics(results[0])
+    
+    # Convert to YOLO format
+    img_width, img_height = img_rgb.size
+    yolo_lines = []
+    
+    if hasattr(predictions, 'xyxy') and len(predictions.xyxy) > 0:
+        for i, box in enumerate(predictions.xyxy):
+            x1, y1, x2, y2 = box
+            x_center = ((x1 + x2) / 2) / img_width
+            y_center = ((y1 + y2) / 2) / img_height
+            width = (x2 - x1) / img_width
+            height = (y2 - y1) / img_height
+            conf = predictions.confidence[i] if hasattr(predictions, 'confidence') else 1.0
+            yolo_lines.append(f"0 {x_center:.6f} {y_center:.6f} {width:.6f} {height:.6f} {conf:.6f}")
+    
+    return yolo_lines
+
+def evaluate_predictions(pred_folder, gt_folder, conf_th=0.1, cat=None):
+    nb_fp, nb_tp, nb_fn = 0, 0, 0
+
+    gt_filenames = [
+        os.path.splitext(os.path.basename(f))[0]
+        for f in glob.glob(os.path.join(gt_folder, "*.txt"))
+    ]
+    pred_filenames = [
+        os.path.splitext(os.path.basename(f))[0]
+        for f in glob.glob(os.path.join(pred_folder, "*.txt"))
+    ]
+
+    all_filenames = set(gt_filenames + pred_filenames)
+    if cat is not None:
+        all_filenames = [f for f in all_filenames if cat == f.split("_")[0].lower()]
+
+    for filename in all_filenames:
+        gt_file = os.path.join(gt_folder, f"{filename}.txt")
+        pred_file = os.path.join(pred_folder, f"{filename}.txt")
+
+        gt_boxes = []
+        if os.path.isfile(gt_file) and os.path.getsize(gt_file) > 0:
+            with open(gt_file, "r") as f:
+                gt_boxes = [
+                    xywh2xyxy(np.array(line.strip().split(" ")[1:5]).astype(float))
+                    for line in f.readlines()
+                ]
+
+        gt_matches = np.zeros(len(gt_boxes), dtype=bool)
+
+        if os.path.isfile(pred_file) and os.path.getsize(pred_file) > 0:
+            with open(pred_file, "r") as f:
+                pred_boxes = [line.strip().split(" ") for line in f.readlines()]
+
+            for pred_box in pred_boxes:
+                try:
+                    _, x, y, w, h, conf = map(float, pred_box)
+                except:
+                    print(f"Error reading {pred_file}")
+                    continue
+                if conf < conf_th:
+                    continue
+                pred_box = xywh2xyxy(np.array([x, y, w, h]))
+
+                if gt_boxes:
+                    # Encontrar la mejor coincidencia por IoU
+                    iou_values = [box_iou(pred_box, gt_box) for gt_box in gt_boxes]
+                    max_iou = max(iou_values)
+                    best_match_idx = np.argmax(iou_values)
+
+                    # Verificar coincidencia válida y única
+                    if max_iou > 0.1 and not gt_matches[best_match_idx]:
+                        nb_tp += 1
+                        gt_matches[best_match_idx] = True
+                    else:
+                        nb_fp += 1
+                else:
+                    nb_fp += 1
+
+        if gt_boxes:
+            nb_fn += len(gt_boxes) - np.sum(gt_matches)
+
+    precision = nb_tp / (nb_tp + nb_fp) if (nb_tp + nb_fp) > 0 else 0
+    recall = nb_tp / (nb_tp + nb_fn) if (nb_tp + nb_fn) > 0 else 0
+    f1_score = (
+        2 * (precision * recall) / (precision + recall)
+        if (precision + recall) > 0
+        else 0
+    )
+
+    return {"precision": precision, "recall": recall, "f1_score": f1_score}
+
+
+def evaluate_model(model_name, model_type, model_path, conf_thres_range):
+    """Evaluate model - generate predictions ONCE at conf=0.01, filter during eval"""
+    print(f"\n{'='*60}")
+    print(f"Evaluating {model_name}")
+    print(f"{'='*60}")
+    
+    # Setup directories
+    model_output_dir = os.path.join(OUTPUT_BASE_DIR, model_name)
+    
+    if model_type == "YOLO":
+        pred_dir_name = "YOLO_predictions"
+    elif model_type == "RF-DETR":
+        pred_dir_name = "RF-DETR_preds_yolo_format"
+    else:
+        pred_dir_name = "RT-DETR_preds_yolo_format"
+    
+    pred_base_dir = os.path.join(model_output_dir, pred_dir_name)
+    plots_dir = os.path.join(model_output_dir, "plots")
+    
+    os.makedirs(pred_base_dir, exist_ok=True)
+    os.makedirs(plots_dir, exist_ok=True)
+    
+    # Generate predictions ONCE at conf=0.01
+    print(f"Generating predictions at conf=0.01...")
+    
+    if model_type == "YOLO":
+        pred_dir = generate_yolo_predictions(model_path, pred_base_dir)
+    else:
+        pred_dir = os.path.join(pred_base_dir, "predictions")
+        os.makedirs(pred_dir, exist_ok=True)
+        
+        # Load model once
+        model = load_models(model_type, model_path)
+        
+        # Get all test images
+        test_images = glob.glob(os.path.join(TEST_IMAGES_DIR, "*.jpg"))
+        test_images.extend(glob.glob(os.path.join(TEST_IMAGES_DIR, "*.png")))
+        
+        for img_path in tqdm(test_images, desc="Generating predictions"):
+            img_name = os.path.splitext(os.path.basename(img_path))[0]
+            pred_file = os.path.join(pred_dir, f"{img_name}.txt")
+            
+            # Generate at conf=0.01 to match YOLO baseline
+            if model_type == "RF-DETR":
+                yolo_lines = generate_rfdetr_predictions(model, img_path, 0.01)
+            else:
+                yolo_lines = generate_rtdetr_predictions(model, img_path, 0.01)
+            
+            with open(pred_file, 'w') as f:
+                if yolo_lines:
+                    f.write('\n'.join(yolo_lines))
+
+    final_pred_dir = os.path.join(pred_base_dir, "predictions_conf_0.01")
+    if os.path.exists(pred_dir) and pred_dir != final_pred_dir:
+        shutil.copytree(pred_dir, final_pred_dir, dirs_exist_ok=True)
+        print(f"Saved predictions to: {final_pred_dir}")
+    
+    # Now evaluate at different thresholds using the SAME predictions
+    all_results = []
+    best_results = None
+    best_conf = 0
+    
+    for conf_threshold in tqdm(conf_thres_range, desc="Evaluating thresholds"):
+        results = evaluate_predictions(pred_dir, GT_FOLDER, conf_threshold)
+        results['confidence_threshold'] = conf_threshold
+        all_results.append(results)
+        
+        if results['f1_score'] > (best_results['f1_score'] if best_results else 0):
+            best_results = results
+            best_conf = conf_threshold
+    
+    # Save results
+    save_results(best_results, best_conf, all_results, model_output_dir, model_name, plots_dir)
+
+    # Generate bounding box visualizations at best threshold
+    generate_bounding_boxes(model_name, model_type, pred_dir, best_conf)
+    
+    return best_results, best_conf
+
+def save_results(best_results, best_conf, all_results, output_dir, model_name, plots_dir):
+    """Save evaluation results with plots and summaries"""
+    
+    # Generate plot
+    conf_thresholds = [r['confidence_threshold'] for r in all_results]
+    f1_scores = [r['f1_score'] for r in all_results]
+    precisions = [r['precision'] for r in all_results]
+    recalls = [r['recall'] for r in all_results]
+    
+    plt.figure(figsize=(10, 6))
+    plt.plot(conf_thresholds, f1_scores, label="F1 Score", color="blue", marker="o")
+    plt.plot(conf_thresholds, precisions, label="Precision", color="green", linestyle="--")
+    plt.plot(conf_thresholds, recalls, label="Recall", color="red", linestyle="-.")
+    
+    plt.scatter(best_conf, best_results['f1_score'], color="blue", s=100, edgecolor="k", zorder=5)
+    plt.scatter(best_conf, best_results['precision'], color="green", s=100, edgecolor="k", zorder=5)
+    plt.scatter(best_conf, best_results['recall'], color="red", s=100, edgecolor="k", zorder=5)
+    
+    plt.text(best_conf, best_results['f1_score'],
+            f" Best F1: {best_results['f1_score']:.2f}\n Precision: {best_results['precision']:.2f}\n Recall: {best_results['recall']:.2f}",
+            fontsize=9, verticalalignment="bottom")
+    
+    plt.title(f"{model_name}: F1 Score, Precision, and Recall vs. Confidence Threshold")
+    plt.xlabel("Confidence Threshold")
+    plt.ylabel("Metric Value")
+    plt.legend()
+    plt.grid(True)
+    plt.savefig(os.path.join(plots_dir, "metrics.png"))
+    plt.close()
+    
+    # Save JSON summary
+    summary = {
+        "model_name": model_name,
+        "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "best_confidence_threshold": float(best_conf),
+        "best_results": {
+            "f1_score": float(best_results['f1_score']),
+            "precision": float(best_results['precision']),
+            "recall": float(best_results['recall'])
+        },
+        "all_results": all_results
+    }
+    
+    with open(os.path.join(output_dir, "evaluation_summary.json"), 'w') as f:
+        json.dump(summary, f, indent=2)
+    
+    # Save TXT summary
+    with open(os.path.join(output_dir, "evaluation_summary.txt"), 'w') as f:
+        f.write(f"Model: {model_name}\n")
+        f.write(f"{'='*50}\n")
+        f.write(f"Best Confidence Threshold: {best_conf:.3f}\n")
+        f.write(f"Best F1 Score: {best_results['f1_score']:.4f}\n")
+        f.write(f"Best Precision: {best_results['precision']:.4f}\n")
+        f.write(f"Best Recall: {best_results['recall']:.4f}\n")
+
+def classify_image_boxes(pred_file, gt_file, conf_threshold):
+    """Mirror exact logic from evaluate_predictions to classify boxes"""
+    # Load GT boxes
+    gt_boxes = []
+    if os.path.isfile(gt_file) and os.path.getsize(gt_file) > 0:
+        with open(gt_file, "r") as f:
+            for line in f.readlines():
+                parts = line.strip().split()
+                if len(parts) >= 5:
+                    _, x, y, w, h = map(float, parts[:5])
+                    gt_boxes.append(xywh2xyxy(np.array([x, y, w, h])))
+    
+    # Load predictions above threshold with their original data
+    pred_data = []
+    if os.path.isfile(pred_file) and os.path.getsize(pred_file) > 0:
+        with open(pred_file, "r") as f:
+            for line in f.readlines():
+                parts = line.strip().split()
+                if len(parts) >= 6:
+                    _, x, y, w, h, conf = map(float, parts)
+                    if conf >= conf_threshold:
+                        pred_box = xywh2xyxy(np.array([x, y, w, h]))
+                        pred_data.append({'box': pred_box, 'conf': conf, 'type': None})
+    
+    # Match predictions to GT - EXACT SAME LOGIC as evaluate_predictions
+    gt_matched = [False] * len(gt_boxes)
+    
+    for pred in pred_data:
+        if gt_boxes:
+            iou_values = [box_iou(pred['box'], gt_box) for gt_box in gt_boxes]
+            max_iou = max(iou_values)
+            best_match_idx = np.argmax(iou_values)
+            
+            # EXACT matching logic from evaluate_predictions
+            if max_iou > 0.1 and not gt_matched[best_match_idx]:
+                pred['type'] = 'TP'
+                gt_matched[best_match_idx] = True
+            else:
+                pred['type'] = 'FP'
+        else:
+            pred['type'] = 'FP'
+    
+    # Determine image classification for folder placement
+    has_tp = any(p['type'] == 'TP' for p in pred_data)
+    has_fp = any(p['type'] == 'FP' for p in pred_data)
+    has_fn = any(not matched for matched in gt_matched)
+    
+    # Return both the detailed box classifications and overall image classification
+    return pred_data, gt_matched, (has_tp, has_fp, has_fn)
+
+def generate_bounding_boxes(model_name, model_type, pred_dir, best_conf):
+    """Generate bounding box visualizations at best threshold"""
+    print(f"Generating bounding boxes for {model_name} at conf={best_conf:.3f}")
+    
+    bbox_dir = os.path.join(OUTPUT_BASE_DIR, model_name, f"predicted_bounding_boxes_{model_type}")
+    for cls in ['TP', 'FP', 'FN']: 
+        os.makedirs(os.path.join(bbox_dir, cls), exist_ok=True)
+    
+    test_images = glob.glob(os.path.join(TEST_IMAGES_DIR, "*.jpg"))
+    test_images.extend(glob.glob(os.path.join(TEST_IMAGES_DIR, "*.png")))
+    
+    for img_path in tqdm(test_images, desc="Drawing bounding boxes"):
+        img_name = os.path.splitext(os.path.basename(img_path))[0]
+        gt_file = os.path.join(GT_FOLDER, f"{img_name}.txt")
+        pred_file = os.path.join(pred_dir, f"{img_name}.txt")
+        
+        # Get detailed box classifications
+        box_classifications = classify_image_boxes(pred_file, gt_file, best_conf)
+        pred_data, gt_matched, (has_tp, has_fp, has_fn) = box_classifications
+        
+        # Skip if no detections or GT
+        if not has_tp and not has_fp and not has_fn:
+            continue
+        
+        # Save to ALL relevant folders
+        folders_to_save = []
+        if has_tp:
+            folders_to_save.append("TP")
+        if has_fp:
+            folders_to_save.append("FP")
+        if has_fn:
+            folders_to_save.append("FN")
+        
+        # Save the same image to each relevant folder
+        for folder in folders_to_save:
+            output_path = os.path.join(bbox_dir, folder, f"{img_name}.jpg")
+            draw_bounding_boxes(img_path, pred_file, gt_file, box_classifications, 
+                              output_path, model_name, best_conf, folder)
+
+
+def draw_bounding_boxes(image_path, pred_file, gt_file, box_classifications, 
+                        output_path, model_name, conf_threshold, folder_type):
+    """Draw bounding boxes with colors based on actual TP/FP classification"""
+    image = cv2.imread(image_path)
+    if image is None:
+        return
+    
+    img_height, img_width = image.shape[:2]
+    
+    pred_data, gt_matched, (has_tp, has_fp, has_fn) = box_classifications
+    
+    # Draw GT boxes with different colors for matched (TP) vs unmatched (FN)
+    if os.path.isfile(gt_file) and os.path.getsize(gt_file) > 0:
+        with open(gt_file, "r") as f:
+            lines = f.readlines()
+            for i, line in enumerate(lines):
+                parts = line.strip().split()
+                if len(parts) >= 5:
+                    _, x, y, w, h = map(float, parts[:5])
+                    x1 = int((x - w/2) * img_width)
+                    y1 = int((y - h/2) * img_height)
+                    x2 = int((x + w/2) * img_width)
+                    y2 = int((y + h/2) * img_height)
+                    
+                    # Yellow for matched GT (part of TP), cyan for unmatched GT (FN)
+                    if i < len(gt_matched) and gt_matched[i]:
+                        cv2.rectangle(image, (x1, y1), (x2, y2), (0, 255, 255), 2)  # Yellow
+                        cv2.putText(image, "GT-matched", (x1, y1-5), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 255), 2)
+                    else:
+                        cv2.rectangle(image, (x1, y1), (x2, y2), (255, 255, 0), 2)  # Cyan for FN
+                        cv2.putText(image, "GT-missed", (x1, y1-5), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 0), 2)
+    
+    # Draw predictions with their actual TP/FP classification
+    if os.path.isfile(pred_file) and os.path.getsize(pred_file) > 0:
+        with open(pred_file, "r") as f:
+            pred_idx = 0
+            for line in f.readlines():
+                parts = line.strip().split()
+                if len(parts) >= 6:
+                    _, x, y, w, h, conf = map(float, parts)
+                    if conf >= conf_threshold:
+                        x1 = int((x - w/2) * img_width)
+                        y1 = int((y - h/2) * img_height)
+                        x2 = int((x + w/2) * img_width)
+                        y2 = int((y + h/2) * img_height)
+                        
+                        # Color based on actual classification
+                        if pred_idx < len(pred_data):
+                            box_type = pred_data[pred_idx]['type']
+                            if box_type == 'TP':
+                                color = (0, 255, 0)  # Green
+                            else:  # FP
+                                color = (0, 0, 255)  # Red
+                            
+                            cv2.rectangle(image, (x1, y1), (x2, y2), color, 2)
+                            label = f"{box_type}: {conf:.2f}"
+                            cv2.putText(image, label, (x1, y2+20), cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
+                        pred_idx += 1
+    
+    # Add header with all info
+    header = f"{model_name} | Contains: "
+    types = []
+    if has_tp: types.append("TP")
+    if has_fp: types.append("FP")  
+    if has_fn: types.append("FN")
+    header += "/".join(types) + f" | Saved in: {folder_type}"
+    
+    cv2.rectangle(image, (0, 0), (img_width, 30), (0, 0, 0), -1)
+    cv2.putText(image, header, (10, 20), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 2)
+    cv2.imwrite(output_path, image)
+
+def find_best_conf_threshold(pred_folder, gt_folder, conf_thres_range, cat=None):
+    best_conf_thres = 0
+    best_f1_score = 0
+    best_precision = 0
+    best_recall = 0
+
+    for conf_thres in conf_thres_range:
+        results = evaluate_predictions(pred_folder, gt_folder, conf_thres, cat)
+        if results["f1_score"] > best_f1_score:
+            best_conf_thres = conf_thres
+            best_f1_score = results["f1_score"]
+            best_precision = results["precision"]
+            best_recall = results["recall"]
+
+    return best_conf_thres, best_f1_score, best_precision, best_recall
+
+
+def evaluate_multiple_pred_folders(pred_folders, gt_folder, conf_thres_range, cat=None):
+    # Initialize a DataFrame to store the results
+    results_df = pd.DataFrame(
+        columns=[
+            "Prediction Folder",
+            "Best Threshold",
+            "Best F1 Score",
+            "Precision",
+            "Recall",
+        ]
+    )
+
+    for pred_folder in pred_folders:
+        best_conf_thres, best_f1_score, best_precision, best_recall = (
+            find_best_conf_threshold(pred_folder, gt_folder, conf_thres_range, cat)
+        )
+
+        # Use loc to append data to the DataFrame to avoid potential issues
+        results_df.loc[len(results_df.index)] = [
+            pred_folder.split("/")[7],
+            best_conf_thres,
+            best_f1_score,
+            best_precision,
+            best_recall,
+        ]
+
+    return results_df
+
+
+def find_best_conf_threshold_and_plot(
+    pred_folder, gt_folder, conf_thres_range, plot=True
+):
+    f1_scores, precisions, recalls = [], [], []
+
+    for conf_thres in conf_thres_range:
+        results = evaluate_predictions(pred_folder, gt_folder, conf_thres)
+        f1_scores.append(results["f1_score"])
+        precisions.append(results["precision"])
+        recalls.append(results["recall"])
+
+    # Find the best confidence threshold
+    best_idx = np.argmax(f1_scores)
+    best_conf_thres = conf_thres_range[best_idx]
+    best_f1_score = f1_scores[best_idx]
+    best_precision = precisions[best_idx]
+    best_recall = recalls[best_idx]
+    # save 
+    # save the best recall, precision and f1 score
+    
+    np.save(f"{pred_folder}/f1_scores.npy", f1_scores)
+    np.save(f"{pred_folder}/precisions.npy", precisions)
+    np.save(f"{pred_folder}/recalls.npy", recalls)
+    np.save(f"{pred_folder}/conf_thres.npy", conf_thres_range)
+
+    if plot:
+
+        # Plotting the metrics
+        plt.figure(figsize=(10, 6))
+        plt.plot(
+            conf_thres_range, f1_scores, label="F1 Score", color="blue", marker="o"
+        )
+        plt.plot(
+            conf_thres_range,
+            precisions,
+            label="Precision",
+            color="green",
+            linestyle="--",
+        )
+        plt.plot(conf_thres_range, recalls, label="Recall", color="red", linestyle="-.")
+
+        # Highlight the best configuration
+        plt.scatter(
+            best_conf_thres, best_f1_score, color="blue", s=100, edgecolor="k", zorder=5
+        )
+        plt.scatter(
+            best_conf_thres,
+            best_precision,
+            color="green",
+            s=100,
+            edgecolor="k",
+            zorder=5,
+        )
+        plt.scatter(
+            best_conf_thres, best_recall, color="red", s=100, edgecolor="k", zorder=5
+        )
+
+        plt.text(
+            best_conf_thres,
+            best_f1_score,
+            f" Best F1: {best_f1_score:.2f}\n Precision: {best_precision:.2f}\n Recall: {best_recall:.2f}",
+            fontsize=9,
+            verticalalignment="bottom",
+        )
+
+        plt.title("F1 Score, Precision, and Recall vs. Confidence Threshold")
+        plt.xlabel("Confidence Threshold")
+        plt.ylabel("Metric Value")
+        plt.legend()
+        plt.grid(True)
+        # save in predictions folder
+        plt.savefig(f"{pred_folder}/metrics.png")
+        # save the list
+
+        plt.show()
+
+    return best_conf_thres, best_f1_score, best_precision, best_recall
+
+if __name__ == "__main__":
+    # Model configurations
+    models = {
+        "YOLO_baseline": {
+            "type": "YOLO",
+            "path": "/vol/bitbucket/si324/rf-detr-wildfire/src/images/outputs/YOLO_baseline/training_outputs/eager-flower-1/weights/best.pt"
+        },
+        "RF-DETR_initial_training": {
+            "type": "RF-DETR",
+            "path": "/vol/bitbucket/si324/rf-detr-wildfire/src/images/outputs/RF-DETR_initial_training/checkpoints/checkpoint_best_ema.pth"
+        },
+        "RT-DETR_initial_training": {
+            "type": "RT-DETR",
+            "path": "/vol/bitbucket/si324/rf-detr-wildfire/src/images/outputs/RT-DETR_initial_training/checkpoints/weights/best.pt"
+        }
+    }
+    
+    conf_range = np.arange(0.1, 0.9, 0.05)
+    all_model_results = {}
+    
+    for model_name, config in models.items():
+        best_results, best_conf = evaluate_model(
+            model_name, 
+            config['type'],
+            config['path'],
+            conf_range
+        )
+        
+        all_model_results[model_name] = {
+            "best_f1": best_results['f1_score'],
+            "precision": best_results['precision'],
+            "recall": best_results['recall'],
+            "best_conf": best_conf
+        }
+    
+    # Save final comparison
+    comparison = {
+        "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "models": all_model_results
+    }
+    
+    with open(os.path.join(OUTPUT_BASE_DIR, "final_comparison_summary.json"), 'w') as f:
+        json.dump(comparison, f, indent=2)
+    
+    with open(os.path.join(OUTPUT_BASE_DIR, "final_comparison_summary.txt"), 'w') as f:
+        f.write("FINAL MODEL COMPARISON\n")
+        f.write("="*60 + "\n\n")
+        
+        for model_name, results in all_model_results.items():
+            f.write(f"{model_name}:\n")
+            f.write(f"  Best F1: {results['best_f1']:.4f} @ conf={results['best_conf']:.3f}\n")
+            f.write(f"  Precision: {results['precision']:.4f}\n")
+            f.write(f"  Recall: {results['recall']:.4f}\n\n")
+    
+    print("\n" + "="*60)
+    print("EVALUATION COMPLETE")
+    print("Results saved to:", OUTPUT_BASE_DIR)
+    print("\nFinal Results:")
+    for model_name, results in all_model_results.items():
+        print(f"\n{model_name}:")
+        print(f"  F1: {results['best_f1']:.4f} @ conf={results['best_conf']:.3f}")
