@@ -31,24 +31,18 @@ project_root = "/vol/bitbucket/si324/rf-detr-wildfire"
 outputs_root = os.path.join(project_root, "src/images/outputs")
 experiment_dir = os.path.join(outputs_root, EXPERIMENT_NAME)
 
-# Create subdirectories for organized output
+# Create subdirectories for checkpoints and logs
 checkpoints_dir = os.path.join(experiment_dir, "checkpoints")
-plots_dir = os.path.join(experiment_dir, "plots") 
 logs_dir = os.path.join(experiment_dir, "logs")
-eval_results_dir = os.path.join(experiment_dir, "eval_results")
 
 # Create all necessary directories
 os.makedirs(checkpoints_dir, exist_ok=True)
-os.makedirs(plots_dir, exist_ok=True)
 os.makedirs(logs_dir, exist_ok=True)
-os.makedirs(eval_results_dir, exist_ok=True)
 
 print(f"🎯 Experiment: {EXPERIMENT_NAME}")
 print(f"📁 Output directory: {experiment_dir}")
 print(f"  ├── checkpoints/   → {checkpoints_dir}")
-print(f"  ├── plots/         → {plots_dir}")
 print(f"  ├── logs/          → {logs_dir}")
-print(f"  └── eval_results/  → {eval_results_dir}")
 
 # ============================================================================
 # TRAINING

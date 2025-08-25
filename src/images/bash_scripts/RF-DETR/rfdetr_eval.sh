@@ -3,8 +3,8 @@
 #SBATCH --mem=32G
 #SBATCH --mail-type=ALL 
 #SBATCH --mail-user=si324 
-#SBATCH --output=/vol/bitbucket/si324/rf-detr-wildfire/outputs/rf_detr_hyperparameter_tuning_v3/logs/eval-%j.out
-#SBATCH --error=/vol/bitbucket/si324/rf-detr-wildfire/outputs/rf_detr_hyperparameter_tuning_v3/logs/eval-%j.err
+#SBATCH --output=/vol/bitbucket/si324/rf-detr-wildfire/src/images/outputs/RF-DETR_initial_training/logs/RF-DETR_eval-%j.out
+#SBATCH --error=/vol/bitbucket/si324/rf-detr-wildfire/src/images/outputs/RF-DETR_initial_training/logs/RF-DETR_eval-%j.err
  
 export PATH=/vol/bitbucket/${USER}/rf-detr-wildfire/.venv/bin:$PATH
 source /vol/bitbucket/${USER}/rf-detr-wildfire/.venv/bin/activate
@@ -15,7 +15,7 @@ source /vol/cuda/12.0.0/setup.sh
 cd /vol/bitbucket/${USER}/rf-detr-wildfire
 
 # Create logs directory if it doesn't exist
-mkdir -p /vol/bitbucket/${USER}/rf-detr-wildfire/outputs/rf_detr_hyperparameter_tuning_v3/logs
+mkdir -p /vol/bitbucket/${USER}/rf-detr-wildfire/src/images/outputs/RF-DETR_initial_training/logs
 
 
-python eval/rfdetr_eval.py
+python src/images/eval/rfdetr_eval.py

@@ -18,6 +18,24 @@ import gc
 import pandas as pd
 from scipy.ndimage import uniform_filter1d
 import wandb
+import logging
+import re
+from ultralytics.utils.metrics import box_iou 
+
+# Force single GPU training
+os.environ['RANK'] = '-1'
+os.environ['LOCAL_RANK'] = '-1'
+os.environ['WORLD_SIZE'] = '1'
+
+class NumpyEncoder(json.JSONEncoder):
+    def default(self, obj):
+        if isinstance(obj, np.integer):
+            return int(obj)
+        elif isinstance(obj, np.floating):
+            return float(obj)
+        elif isinstance(obj, np.ndarray):
+            return obj.tolist()
+        return super(NumpyEncoder, self).default(obj)
 
 # Set cache directory for Ultralytics models to prevent downloads to project root
 cache_dir = Path.home() / ".ultralytics_cache"  
@@ -36,150 +54,269 @@ DATASET_PATH = f"{PROJECT_ROOT}/src/images/data/pyro25img/images"
 OUTPUT_DIR = f"{PROJECT_ROOT}/src/images/outputs/{EXPERIMENT_NAME}"
 
 # Validation setup (same as RF-DETR)
-VALIDATION_DIR = f"{DATASET_PATH}/images/valid"
+VALIDATION_DIR = f"{DATASET_PATH}/valid"
 VALIDATION_ANNOTATIONS = f"{VALIDATION_DIR}/_annotations.coco.json"
 
-class Logger:
-    """Comprehensive logging for RT-DETR hyperparameter tuning with full resumability."""
-    
-    def __init__(self, trial_dir):
-        self.trial_dir = trial_dir
-        self.checkpoints_dir = os.path.join(trial_dir, "checkpoints")
-        self.plots_dir = os.path.join(trial_dir, "plots")
-        self.metrics_dir = os.path.join(trial_dir, "metrics")
-        self.logs_dir = os.path.join(trial_dir, "logs")
-        self.backups_dir = os.path.join(trial_dir, "backups")
-        
-        # Create all directories
-        for dir_path in [self.checkpoints_dir, self.plots_dir, self.metrics_dir, 
-                        self.logs_dir, self.backups_dir]:
-            os.makedirs(dir_path, exist_ok=True)
-        
-        self.metrics_history = {
-            'epoch': [], 'train_loss': [], 'val_loss': [], 'map50': [], 'map50_95': [],
-            'precision': [], 'recall': [], 'learning_rate': [], 'training_time': [], 'memory_usage': []
-        }
-        
-    def log_epoch_metrics(self, epoch, metrics):
-        """Log comprehensive metrics for each epoch."""
-        timestamp = datetime.now().isoformat()
-        
-        # Update metrics history
-        for key, value in metrics.items():
-            if key in self.metrics_history:
-                self.metrics_history[key].append(value)
-        
-        # Save epoch-specific metrics
-        epoch_file = os.path.join(self.metrics_dir, f"epoch_{epoch:03d}.json")
-        epoch_data = {
-            'epoch': epoch,
-            'timestamp': timestamp,
-            'metrics': metrics,
-            'gpu_memory_mb': torch.cuda.memory_allocated() / 1024**2 if torch.cuda.is_available() else 0,
-            'system_memory_gb': shutil.disk_usage(self.trial_dir).free / 1024**3
-        }
-        
-        with open(epoch_file, 'w') as f:
-            json.dump(epoch_data, f, indent=2)
-    
-    def save_trial_metadata(self, hyperparameters, start_time, status, additional_info=None):
-        """Save comprehensive trial metadata for resumability."""
-        metadata = {
-            'trial_info': {
-                'hyperparameters': hyperparameters,
-                'start_time': start_time,
-                'status': status,
-                'last_update': datetime.now().isoformat(),
-            },
-            'system_info': {
-                'pytorch_version': torch.__version__,
-                'cuda_version': getattr(torch.version, 'cuda', None) if torch.cuda.is_available() else None,
-                'gpu_name': torch.cuda.get_device_name() if torch.cuda.is_available() else 'CPU',
-                'gpu_memory_gb': torch.cuda.get_device_properties(0).total_memory / 1024**3 if torch.cuda.is_available() else 0,
-            },
-            'paths': {
-                'checkpoints': self.checkpoints_dir,
-                'plots': self.plots_dir,
-                'metrics': self.metrics_dir,
-                'logs': self.logs_dir,
-                'backups': self.backups_dir,
-            },
-            'metrics_history': self.metrics_history,
-        }
-        
-        if additional_info:
-            metadata.update(additional_info)
-        
-        metadata_file = os.path.join(self.trial_dir, "trial_metadata.json")
-        with open(metadata_file, 'w') as f:
-            json.dump(metadata, f, indent=2)
-    
-    def backup_trial_state(self, trial_number, epoch=None):
-        """Create comprehensive backup of trial state."""
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        backup_name = f"trial_{trial_number:03d}_backup_{timestamp}"
-        
-        if epoch is not None:
-            backup_name += f"_epoch_{epoch:03d}"
-        
-        backup_path = os.path.join(self.backups_dir, backup_name)
-        os.makedirs(backup_path, exist_ok=True)
-        
-        # Backup all important files
-        files_to_backup = [
-            (os.path.join(self.trial_dir, "trial_metadata.json"), "trial_metadata.json"),
-            (os.path.join(self.trial_dir, "trial_results.json"), "trial_results.json"),
-        ]
-        
-        # Backup latest checkpoint if exists
-        if os.path.exists(self.checkpoints_dir):
-            checkpoint_files = [f for f in os.listdir(self.checkpoints_dir) if f.endswith('.pt')]
-            if checkpoint_files:
-                latest_checkpoint = max(checkpoint_files, key=lambda x: os.path.getctime(os.path.join(self.checkpoints_dir, x)))
-                files_to_backup.append((
-                    os.path.join(self.checkpoints_dir, latest_checkpoint),
-                    f"latest_checkpoint_{latest_checkpoint}"
-                ))
-        
-        # Backup metrics directory
-        if os.path.exists(self.metrics_dir):
-            shutil.copytree(self.metrics_dir, os.path.join(backup_path, "metrics"), dirs_exist_ok=True)
-        
-        # Copy individual files
-        for src, dst in files_to_backup:
-            if os.path.exists(src):
-                shutil.copy2(src, os.path.join(backup_path, dst))
-        
-        # Save backup manifest
-        backup_manifest = {
-            'backup_timestamp': timestamp,
-            'trial_number': trial_number,
-            'epoch': epoch,
-            'files_backed_up': [dst for src, dst in files_to_backup if os.path.exists(src)],
-            'backup_size_mb': sum(os.path.getsize(os.path.join(backup_path, f)) 
-                                for f in os.listdir(backup_path) if os.path.isfile(os.path.join(backup_path, f))) / 1024**2
-        }
-        
-        with open(os.path.join(backup_path, "backup_manifest.json"), 'w') as f:
-            json.dump(backup_manifest, f, indent=2)
-        
-        return backup_path
+# Evaluation parameters 
+IOU_THRESHOLD = 0.1  
+CONFIDENCE_THRESHOLDS = np.round(np.linspace(0.10, 0.90, 17), 2)
 
-def backup_study_database():
-    """Backup the Optuna study database."""
-    backups_dir = os.path.join(OUTPUT_DIR, "backups")
-    os.makedirs(backups_dir, exist_ok=True)
+# Training configuration
+N_TRIALS = 25  # Match RF-DETR
+EFFECTIVE_BATCH_SIZE = 16  # Target for gradient accumulation
+
+
+def box_iou_numpy(box1: np.ndarray, box2: np.ndarray, eps: float = 1e-7):
+    """Calculate IoU - numpy version for evaluation"""
+    if box1.ndim == 1:
+        box1 = box1.reshape(1, 4)
+    if box2.ndim == 1:
+        box2 = box2.reshape(1, 4)
     
-    study_db_path = os.path.join(OUTPUT_DIR, "study.db")
-    if os.path.exists(study_db_path):
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        backup_path = os.path.join(backups_dir, f"study_backup_{timestamp}.db")
-        shutil.copy2(study_db_path, backup_path)
+    (a1, a2), (b1, b2) = np.split(box1, 2, 1), np.split(box2, 2, 1)
+    inter = ((np.minimum(a2, b2[:, None, :]) - np.maximum(a1, b1[:, None, :])).clip(0).prod(2))
+    return inter / ((a2 - a1).prod(1) + (b2 - b1).prod(1)[:, None] - inter + eps)
+
+def cache_predictions_rtdetr(model, val_dataset, min_conf=0.01):
+    """Cache predictions from RT-DETR (adapted from RF-DETR)"""
+    print(f"    Caching predictions from {len(val_dataset)} validation images...")
+    all_predictions = []
+    
+    start_time = time.time()
+    
+    with torch.inference_mode():
+        for path, _, annotations in tqdm(val_dataset, desc="Inference", leave=False):
+            # RT-DETR prediction
+            results = model.predict(path, conf=min_conf, verbose=False)
+            
+            if len(results) > 0 and results[0].boxes is not None:
+                boxes = results[0].boxes.xyxy.cpu().numpy()
+                confidences = results[0].boxes.conf.cpu().numpy()
+            else:
+                boxes = np.empty((0, 4), dtype=float)
+                confidences = np.empty(0, dtype=float)
+            
+            all_predictions.append({
+                'path': path,
+                'annotations': annotations,
+                'boxes': boxes,
+                'confidences': confidences
+            })
+    
+    inference_time = time.time() - start_time
+    print(f"    Inference complete in {inference_time:.1f} seconds")
+    return all_predictions
+
+
+def evaluate_at_threshold(cached_predictions, confidence_threshold):
+    """
+    Evaluate cached predictions at specific threshold 
+    """
+    tp = fp = fn = 0
+    
+    for pred_data in cached_predictions:
+        # Filter by confidence 
+        boxes_all = pred_data['boxes']
+        if boxes_all.size == 0:
+            filtered_boxes = np.empty((0, 4), dtype=float)
+        else:
+            filtered_boxes = boxes_all[pred_data['confidences'] >= confidence_threshold]
+
+        # Get ground truth boxes
+        gt_boxes = np.array(pred_data['annotations'].xyxy)
+        gt_matches = np.zeros(len(gt_boxes), dtype=bool) if gt_boxes.size > 0 else np.array([])
+
+        # Process each prediction 
+        for pred_box in filtered_boxes:
+            if gt_boxes.size > 0: 
+                # Find the best match by IoU
+                iou_values = [box_iou_numpy(pred_box, gt_box)[0, 0] for gt_box in gt_boxes]
+                max_iou = max(iou_values)
+                best_match_idx = np.argmax(iou_values)
+                
+                # Check for a valid and unique match
+                if max_iou > IOU_THRESHOLD and not gt_matches[best_match_idx]:
+                    tp += 1
+                    gt_matches[best_match_idx] = True
+                else:
+                    fp += 1
+            else:
+                fp += 1  #If no GT boxes, prediction is FP
         
-        # Keep only last 10 backups
-        backups = sorted([f for f in os.listdir(backups_dir) if f.startswith("study_backup_")], reverse=True)
-        for old_backup in backups[10:]:
-            os.remove(os.path.join(backups_dir, old_backup))
+        # Count unmatched GT boxes as FN
+        if gt_boxes.size > 0:  
+            fn += len(gt_boxes) - np.sum(gt_matches)
+    
+    # Calculate metrics
+    precision = tp / (tp + fp) if (tp + fp) > 0 else 0.0
+    recall = tp / (tp + fn) if (tp + fn) > 0 else 0.0
+    f1 = 2 * ( precision * recall ) / (precision + recall) if (precision + recall) > 0 else 0.0
+    
+    return f1, precision, recall, int(tp), int(fp), int(fn)
+
+def find_best_threshold(cached_predictions, confidence_thresholds):
+    """
+    Find best confidence threshold for this model
+    """
+    results = []
+    
+    for conf in confidence_thresholds:
+        f1, prec, rec, tp, fp, fn = evaluate_at_threshold(cached_predictions, conf)
+        results.append({
+            'confidence': conf,
+            'f1_score': f1,
+            'precision': prec,
+            'recall': rec,
+            'tp': tp,
+            'fp': fp,
+            'fn': fn
+        })
+    
+    # Find best
+    best_idx = np.argmax([r['f1_score'] for r in results])
+    return results[best_idx], results
+
+def parse_ultralytics_metrics(trial_dir):
+    """Parse RT-DETR training metrics from CSV"""
+    metrics = {
+        'epochs': [],
+        'train_loss': [],
+        'val_loss': [],
+        'mAP50': [],
+        'mAP50_95': []
+    }
+    
+    results_csv = os.path.join(trial_dir, "checkpoints", "results.csv")
+    if os.path.exists(results_csv):
+        df = pd.read_csv(results_csv)
+        df.columns = [col.strip() for col in df.columns]
+        
+        if 'epoch' in df.columns:
+            metrics['epochs'] = df['epoch'].tolist()
+        if 'train/box_loss' in df.columns:
+            metrics['train_loss'] = df['train/box_loss'].tolist()
+        if 'val/box_loss' in df.columns:
+            metrics['val_loss'] = df['val/box_loss'].tolist()
+        if 'metrics/mAP50(B)' in df.columns:
+            metrics['mAP50'] = df['metrics/mAP50(B)'].tolist()
+        if 'metrics/mAP50-95(B)' in df.columns:
+            metrics['mAP50_95'] = df['metrics/mAP50-95(B)'].tolist()
+    
+    return metrics
+
+def plot_training_curves(trial_dir, metrics, experiment_name=EXPERIMENT_NAME):
+    """Generate comprehensive training plots"""
+    if len(metrics['epochs']) < 2:
+        return
+    
+    fig, axes = plt.subplots(2, 2, figsize=(15, 12))
+    
+    # 1. Training Loss
+    if metrics['train_loss']:
+        axes[0, 0].plot(metrics['epochs'], metrics['train_loss'], 'b-', linewidth=2)
+        axes[0, 0].set_title('Training Loss', fontsize=12, weight='bold')
+        axes[0, 0].set_xlabel('Epoch')
+        axes[0, 0].set_ylabel('Loss')
+        axes[0, 0].grid(True, alpha=0.3)
+        
+        # Mark minimum
+        if metrics['train_loss']:
+            min_loss = min(metrics['train_loss'])
+            min_epoch = metrics['epochs'][metrics['train_loss'].index(min_loss)]
+            axes[0, 0].scatter(min_epoch, min_loss, color='red', s=100, zorder=5)
+            axes[0, 0].text(min_epoch, min_loss, f' Min: {min_loss:.4f}', fontsize=9)
+    
+    # 2. mAP 
+    if metrics['mAP50']:
+        axes[0, 1].plot(metrics['epochs'][:len(metrics['mAP50'])], metrics['mAP50'], 'g-', linewidth=2)
+        axes[0, 1].set_title('Validation mAP (RT-DETR Internal)', fontsize=12, weight='bold')
+        axes[0, 1].set_xlabel('Epoch')
+        axes[0, 1].set_ylabel('mAP')
+        axes[0, 1].grid(True, alpha=0.3)
+        axes[0, 1].text(0.5, 0.98, '(Not used for optimization)', 
+                       transform=axes[0, 1].transAxes, ha='center', 
+                       fontsize=10, color='red', weight='bold')
+    else:
+        axes[0, 1].text(0.5, 0.5, 'mAP not available', ha='center', va='center')
+        axes[0, 1].set_title('Validation mAP')
+    
+    # 3. Loss trajectory
+    if metrics['train_loss']:
+        axes[1, 0].plot(metrics['epochs'], metrics['train_loss'], 'b-', alpha=0.7, linewidth=2)
+        
+        # Add smoothed line
+        if len(metrics['train_loss']) > 5:
+            smoothed = uniform_filter1d(metrics['train_loss'], size=5, mode='nearest')
+            axes[1, 0].plot(metrics['epochs'], smoothed, 'r-', linewidth=2, label='Smoothed')
+        
+        axes[1, 0].set_title('Loss Trajectory', fontsize=12, weight='bold')
+        axes[1, 0].set_xlabel('Epoch')
+        axes[1, 0].set_ylabel('Loss')
+        axes[1, 0].legend()
+        axes[1, 0].grid(True, alpha=0.3)
+    
+    # 4. Training Summary
+    axes[1, 1].axis('off')
+    summary_text = "TRAINING SUMMARY\n" + "="*20 + "\n\n"
+    
+    if metrics['epochs']:
+        summary_text += f"Total Epochs: {max(metrics['epochs'])}\n\n"
+    
+    if metrics['train_loss']:
+        summary_text += f"Initial Loss: {metrics['train_loss'][0]:.4f}\n"
+        summary_text += f"Final Loss: {metrics['train_loss'][-1]:.4f}\n"
+        summary_text += f"Min Loss: {min(metrics['train_loss']):.4f}\n"
+        summary_text += f"Loss Reduction: {(metrics['train_loss'][0] - metrics['train_loss'][-1]) / metrics['train_loss'][0] * 100:.1f}%\n\n"
+    
+    if metrics['mAP50']:
+        summary_text += f"Final mAP50: {metrics['mAP50'][-1]:.4f}\n"
+    
+    axes[1, 1].text(0.1, 0.9, summary_text, transform=axes[1, 1].transAxes,
+                   fontsize=11, verticalalignment='top', family='monospace')
+    
+    plt.suptitle(f'{EXPERIMENT_NAME} Training Analysis', fontsize=14, weight='bold')
+    plt.tight_layout()
+    plt.savefig(os.path.join(trial_dir, 'training_curves.png'), dpi=150, bbox_inches='tight')
+    plt.close()
+
+def plot_threshold_analysis(trial_dir, threshold_results, best_result, experiment_name=EXPERIMENT_NAME):
+    """Plot confidence threshold sweep"""
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(15, 6))
+    
+    confs = [r['confidence'] for r in threshold_results]
+    f1_scores = [r['f1_score'] for r in threshold_results]
+    precisions = [r['precision'] for r in threshold_results]
+    recalls = [r['recall'] for r in threshold_results]
+    
+    # F1 vs threshold
+    ax1.plot(confs, f1_scores, 'b-', marker='o', linewidth=2, markersize=8, label='F1 Score')
+    ax1.scatter(best_result['confidence'], best_result['f1_score'], 
+               color='red', s=200, marker='*', zorder=5)
+    ax1.text(best_result['confidence'], best_result['f1_score'] + 0.02,
+            f"Best: {best_result['f1_score']:.3f}\n@ conf={best_result['confidence']:.1f}",
+            ha='center', fontsize=10, weight='bold')
+    ax1.set_xlabel('Confidence Threshold', fontsize=12)
+    ax1.set_ylabel('F1 Score', fontsize=12)
+    ax1.set_title('F1 Score vs Confidence Threshold', fontsize=12, weight='bold')
+    ax1.grid(True, alpha=0.3)
+    ax1.set_ylim([0, 1])
+    
+    # Precision/Recall vs threshold
+    ax2.plot(confs, precisions, 'orange', marker='^', linewidth=2, markersize=7, label='Precision')
+    ax2.plot(confs, recalls, 'green', marker='v', linewidth=2, markersize=7, label='Recall')
+    ax2.axvline(x=best_result['confidence'], color='red', linestyle='--', alpha=0.5)
+    ax2.set_xlabel('Confidence Threshold', fontsize=12)
+    ax2.set_ylabel('Score', fontsize=12)
+    ax2.set_title('Precision/Recall vs Confidence Threshold', fontsize=12, weight='bold')
+    ax2.legend()
+    ax2.grid(True, alpha=0.3)
+    ax2.set_ylim([0, 1])
+    
+    plt.suptitle(f'{EXPERIMENT_NAME} Threshold Analysis - Best F1: {best_result["f1_score"]:.4f} @ {best_result["confidence"]:.1f}',
+                fontsize=14, weight='bold')
+    plt.tight_layout()
+    plt.savefig(os.path.join(trial_dir, 'threshold_analysis.png'), dpi=150, bbox_inches='tight')
+    plt.close()
 
 def objective(trial):
     """
@@ -188,61 +325,66 @@ def objective(trial):
     """
     start_time = datetime.now()
     trial_start_time = start_time.isoformat()
+
+    trial_start = time.time()
     
     try:
-        # Official RT-DETR hyperparameter ranges (from paper and repo)
-        # Epochs: Official models trained for 72 epochs (6x schedule)
-        epochs = trial.suggest_int("epochs", 36, 108, step=12)  # 3x to 9x schedule
-        
-        # Batch size: Official uses effective batch size of 16-32
+        epochs = trial.suggest_int("epochs", 36, 72, step=12)  # 3x to 9x schedule
         batch = trial.suggest_categorical("batch", [4, 8, 16, 32])
-        
         # Learning rate: Official RT-DETR uses 1e-4 base LR
         lr0 = trial.suggest_float("lr0", 5e-5, 5e-4, log=True)
-        
         # Image size: Official RT-DETR primarily uses 640x640
         imgsz = trial.suggest_categorical("imgsz", [640, 896, 1024])
-        
         # Optimizer: Official RT-DETR uses AdamW
         optimizer = trial.suggest_categorical("optimizer", ["AdamW", "SGD"])
-        
         # Weight decay: Important for transformer models
         weight_decay = trial.suggest_float("weight_decay", 1e-5, 1e-3, log=True)
-        
         # Patience for early stopping
         patience = trial.suggest_int("patience", 20, 50, step=10)
-        
         # Loss function weights (RT-DETR specific)
         cls_loss = trial.suggest_float("cls", 1.0, 4.0)
         bbox_loss = trial.suggest_float("bbox", 2.0, 8.0)
         giou_loss = trial.suggest_float("giou", 1.0, 3.0)
-        
         # Focal loss alpha and gamma (for classification)
         focal_alpha = trial.suggest_float("focal_alpha", 0.2, 0.3)
         focal_gamma = trial.suggest_float("focal_gamma", 1.5, 2.5)
-        
         # Learning rate schedule
         cos_lr = trial.suggest_categorical("cos_lr", [True, False])
         warmup_epochs = trial.suggest_int("warmup_epochs", 1, 5)
-        
-        # Augmentation parameters (important for small object detection)
+        # Augmentation parameters 
         mixup = trial.suggest_float("mixup", 0.0, 0.2)
         mosaic = trial.suggest_float("mosaic", 0.8, 1.0)
         dropout = trial.suggest_float("dropout", 0.0, 0.2)
 
-        # Create trial directory and logger
+        # Create trial directory 
         trial_dir = os.path.join(OUTPUT_DIR, f"trial_{trial.number:03d}")
-        logger = Logger(trial_dir)
-        
-        # Save initial trial metadata
-        trial_params = dict(trial.params)
-        trial_params.update({
-            'trial_number': trial.number,
-            'estimated_training_hours': epochs * 0.5,  # Rough estimate
-            'effective_batch_size': batch,
-        })
-        
-        logger.save_trial_metadata(trial_params, trial_start_time, "starting")
+        os.makedirs(trial_dir, exist_ok=True)
+        os.makedirs(os.path.join(trial_dir, "checkpoints"), exist_ok=True)
+
+        # Collect all hyperparameters
+        hp = {
+            'epochs': epochs,
+            'batch_size': batch,
+            'lr0': lr0,
+            'imgsz': imgsz,
+            'optimizer': optimizer,
+            'weight_decay': weight_decay,
+            'patience': patience,
+            'cls': cls_loss,
+            'bbox': bbox_loss,
+            'giou': giou_loss,
+            'focal_alpha': focal_alpha,
+            'focal_gamma': focal_gamma,
+            'cos_lr': cos_lr,
+            'warmup_epochs': warmup_epochs,
+            'mixup': mixup,
+            'mosaic': mosaic,
+            'dropout': dropout,
+        }
+
+        # Save hyperparameters
+        with open(os.path.join(trial_dir, "hyperparameters.json"), 'w') as f:
+            json.dump(hp, f, indent=2, cls=NumpyEncoder)
         
         print(f"\n🎯 Trial {trial.number}: lr0={lr0:.2e}, imgsz={imgsz}, batch={batch}, epochs={epochs}")
         print(f"   Loss weights - cls: {cls_loss:.2f}, bbox: {bbox_loss:.2f}, giou: {giou_loss:.2f}")
@@ -250,14 +392,11 @@ def objective(trial):
 
         # Change to checkpoints dir for model downloads
         original_dir = os.getcwd()  # type: ignore
-        os.chdir(logger.checkpoints_dir)  # type: ignore
+        os.chdir(os.path.join(trial_dir, "checkpoints"))  # type: ignore
         
         # Use RT-DETR-X for best performance (as per official benchmarks)
         model = RTDETR("rtdetr-x.pt")
         os.chdir(original_dir)  # type: ignore
-
-        # Update status
-        logger.save_trial_metadata(trial_params, trial_start_time, "training")
 
         # Train with official RT-DETR style hyperparameters
         training_start = datetime.now()
@@ -281,7 +420,9 @@ def objective(trial):
             optimizer=optimizer,
             cos_lr=cos_lr,
             warmup_epochs=warmup_epochs,
-            
+            workers=8,
+            nbs=16,
+   
             # RT-DETR specific loss weights
             cls=cls_loss,
             box=bbox_loss,  # Combined bbox loss weight
@@ -304,98 +445,84 @@ def objective(trial):
         
         training_time = (datetime.now() - training_start).total_seconds()
 
-        def compute_overlap_metric(pred_boxes, gt_boxes, iou_threshold=0.3):
-            """Custom metric: proportion of predictions with IoU > threshold"""
-            if len(pred_boxes) == 0 or len(gt_boxes) == 0:
-                return 0.0
-            ious = bbox_iou(torch.tensor(pred_boxes), torch.tensor(gt_boxes), iou_type='iou')
-            max_ious = ious.max(dim=1)[0]
-            return (max_ious > iou_threshold).float().mean().item()
+        # Parse training metrics
+        training_metrics = parse_ultralytics_metrics(trial_dir)
+        plot_training_curves(trial_dir, training_metrics)
 
-        # Fallback mAP if overlap metric fails
-        score = 0.0
-        metrics = {}
+        # Load best checkpoint for evaluation
+        checkpoint_path = os.path.join(trial_dir, "checkpoints", "weights", "best.pt")
+        if not os.path.exists(checkpoint_path):
+            checkpoint_path = os.path.join(trial_dir, "checkpoints", "weights", "last.pt")
 
-        try:
-            if hasattr(results, 'results_dict'):
-                metrics = results.results_dict
-                score = metrics.get('metrics/mAP50-95(B)', 0.0)
+        print(f"  Loading checkpoint for evaluation...")
+        eval_model = RTDETR(checkpoint_path)
 
-            print(f"✅ Trial {trial.number}: mAP50-95 = {score:.4f}")
+        # Load validation dataset
+        val_ds = sv.DetectionDataset.from_coco(
+            images_directory_path=VALIDATION_DIR,
+            annotations_path=VALIDATION_ANNOTATIONS
+        )
+        print(f"  Loaded {len(val_ds)} validation images")
 
-            # Custom overlap metric (optional, tweak as needed)
-            pred_boxes = results.boxes.xyxy.cpu().numpy() if hasattr(results, 'boxes') else []
-            gt_boxes = results.data['labels'] if hasattr(results, 'data') else []
-            overlap_score = compute_overlap_metric(pred_boxes, gt_boxes)
-            print(f"   🔍 IoU@0.5 overlap score = {overlap_score:.3f}")
+        # Cache predictions and find best threshold
+        cached_predictions = cache_predictions_rtdetr(eval_model, val_ds, min_conf=0.01)
+        best_result, all_threshold_results = find_best_threshold(cached_predictions, CONFIDENCE_THRESHOLDS)
 
-            # Optional: replace mAP score with overlap for optimization
-            score = overlap_score
+        print(f"  Best F1: {best_result['f1_score']:.4f} @ confidence={best_result['confidence']:.1f}")
+        print(f"  Precision: {best_result['precision']:.4f}, Recall: {best_result['recall']:.4f}")
 
-        except Exception as e:
-            print(f"⚠️ Metric extraction failed: {e}")
-            score = 0.0
+        # Plot threshold analysis
+        plot_threshold_analysis(trial_dir, all_threshold_results, best_result)
 
-        # Save comprehensive trial results
-        trial_results = {
-            'trial_number': trial.number,
-            'timing': {
-                'start_time': trial_start_time,
-                'end_time': datetime.now().isoformat(),
-                'training_hours': training_time / 3600,
-                'total_hours': (datetime.now() - start_time).total_seconds() / 3600,
-            },
-            'hyperparameters': {
-                'epochs': epochs,
-                'batch_size': batch,
-                'learning_rate': lr0,
-                'weight_decay': weight_decay,
-                'image_size': imgsz,
-                'optimizer': optimizer,
-                'loss_weights': {
-                    'cls': cls_loss,
-                    'bbox': bbox_loss,
-                    'giou': giou_loss,
-                },
-                'focal_loss': {
-                    'alpha': focal_alpha,
-                    'gamma': focal_gamma,
-                },
-                'augmentation': {
-                    'mixup': mixup,
-                    'mosaic': mosaic,
-                    'dropout': dropout,
-                },
-                'schedule': {
-                    'cosine_lr': cos_lr,
-                    'warmup_epochs': warmup_epochs,
-                    'patience': patience,
-                }
-            },
-            'results': {
-                'mAP50_95': score,
-                'all_metrics': metrics,
-            },
-            'system_info': {
-                'gpu_memory_peak_gb': torch.cuda.max_memory_allocated() / 1024**3 if torch.cuda.is_available() else 0,
-                'model_variant': 'rtdetr-x',
-                'checkpoint_files': [f for f in os.listdir(logger.checkpoints_dir) if f.endswith('.pt')],
-            },
-            'status': 'completed'
+        score = best_result['f1_score']  # THIS IS WHAT WE OPTIMIZE!
+
+        # Clean up eval model
+        del eval_model
+        torch.cuda.empty_cache()
+
+        # Save comprehensive results 
+        results = {
+            "trial_number": trial.number,
+            "hyperparameters": hp,
+            "training_time_hours": training_time / 3600,
+            "total_trial_time_hours": (time.time() - trial_start) / 3600,
+            "best_result": best_result,
+            "all_threshold_results": all_threshold_results,
+            "training_metrics": training_metrics,
+            "timestamp": datetime.now().isoformat(),
+            "hardware": {
+                "gpu": torch.cuda.get_device_name() if torch.cuda.is_available() else "CPU",
+                "cuda_version": torch.version.cuda,
+                "torch_version": torch.__version__,
+            }
         }
-        
-        with open(os.path.join(trial_dir, "trial_results.json"), "w") as f:
-            json.dump(trial_results, f, indent=2)
 
-        # Final comprehensive backup
-        backup_path = logger.backup_trial_state(trial.number, epochs)
-        print(f"💾 Trial {trial.number} backup saved: {backup_path}")
-        
-        # Update trial metadata
-        logger.save_trial_metadata(trial_params, trial_start_time, "completed", {
-            'final_score': score,
-            'backup_path': backup_path,
-        })
+        with open(os.path.join(trial_dir, "results.json"), 'w') as f:
+            json.dump(results, f, indent=2, cls=NumpyEncoder)
+
+        # Save summary (match RF-DETR format)
+        with open(os.path.join(trial_dir, "summary.txt"), 'w') as f:
+            f.write(f"TRIAL {trial.number} SUMMARY\n")
+            f.write("="*60 + "\n\n")
+            
+            f.write("HYPERPARAMETERS:\n")
+            for k, v in hp.items():
+                f.write(f"  {k}: {v}\n")
+            
+            f.write(f"\nTRAINING:\n")
+            f.write(f"  Training time: {training_time/3600:.1f} hours\n")
+            if training_metrics['train_loss']:
+                f.write(f"  Initial loss: {training_metrics['train_loss'][0]:.4f}\n")
+                f.write(f"  Final loss: {training_metrics['train_loss'][-1]:.4f}\n")
+            
+            f.write(f"\nFINAL RESULTS:\n")
+            f.write(f"  Best F1 Score: {best_result['f1_score']:.4f}\n")
+            f.write(f"  Best Confidence: {best_result['confidence']:.1f}\n")
+            f.write(f"  Precision: {best_result['precision']:.4f}\n")
+            f.write(f"  Recall: {best_result['recall']:.4f}\n")
+            f.write(f"  TP={best_result['tp']}, FP={best_result['fp']}, FN={best_result['fn']}\n")
+
+        logging.info(f"Trial {trial.number}: F1={best_result['f1_score']:.4f} @ conf={best_result['confidence']:.1f}")
 
         # GPU cleanup
         del model
@@ -420,19 +547,11 @@ def objective(trial):
         }
         
         trial_dir = os.path.join(OUTPUT_DIR, f"trial_{trial.number:03d}")
-        logger = Logger(trial_dir)
         
         with open(os.path.join(trial_dir, "failure_info.json"), "w") as f:
             json.dump(failure_info, f, indent=2)
         
-        # Save partial backup even on failure
-        try:
-            backup_path = logger.backup_trial_state(trial.number)
-            print(f"💾 Failed trial {trial.number} backup saved: {backup_path}")
-        except:
-            pass
-        
-        # Cleanup on failure
+        # Cleanup 
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
         
@@ -443,12 +562,28 @@ def main():
     """
     Run RT-DETR hyperparameter optimization following official best practices with full resumability.
     """
-    print("🚀 Official RT-DETR Hyperparameter Optimization with Comprehensive Logging")
-    print(f"🎯 Experiment: {EXPERIMENT_NAME}")
-    print(f"📁 Output: {OUTPUT_DIR}")
-    print(f"🔧 Dataset: {DATASET_PATH}")
-    print("📊 Following official RT-DETR paper recommendations")
-    print("💾 Full resumability and state preservation for multi-day training")
+    os.makedirs(OUTPUT_DIR, exist_ok=True)
+
+    # Setup logging 
+    os.makedirs(os.path.join(OUTPUT_DIR, "logs"), exist_ok=True)
+    logging.basicConfig(
+        level=logging.INFO,
+        format='%(asctime)s - %(message)s',
+        handlers=[
+            logging.FileHandler(os.path.join(OUTPUT_DIR, "logs", "optimization.log")),
+            logging.StreamHandler()
+        ]
+    )
+    
+    print("\n" + "="*60)
+    print("RT-DETR HYPERPARAMETER OPTIMIZATION")
+    print("="*60)
+    print(f"📁 Experiment: {EXPERIMENT_NAME}")
+    print(f"🎯 Target: F1 Score (matching RF-DETR)")
+    print(f"📊 Method: Smart threshold sweep per model")
+    print(f"🔍 IoU: {IOU_THRESHOLD}")
+    print(f"🔢 Trials: {N_TRIALS}")
+    print("="*60 + "\n")
     
     # Save global experiment metadata
     experiment_metadata = {
@@ -456,10 +591,10 @@ def main():
         'start_time': datetime.now().isoformat(),
         'dataset_path': DATASET_PATH,
         'output_dir': OUTPUT_DIR,
-        'total_planned_trials': 20,
+        'total_planned_trials': N_TRIALS,
         'expected_duration_days': 4,
         'model_variant': 'rtdetr-x',
-        'optimization_objective': 'mAP50-95_maximization',
+        'optimization_objective': 'F1_score_with_threshold_sweep',
         'gpu_info': {
             'device_name': torch.cuda.get_device_name() if torch.cuda.is_available() else 'CPU',
             'memory_total_gb': torch.cuda.get_device_properties(0).total_memory / 1024**3 if torch.cuda.is_available() else 0
@@ -476,7 +611,7 @@ def main():
     
     # Create Optuna study with appropriate sampler
     study = optuna.create_study(
-        direction="maximize",  # Maximize mAP50-95
+        direction="maximize",  # Maximize F1 score
         study_name="rtdetr_official_tuning",
         storage=f"sqlite:///{OUTPUT_DIR}/study.db",
         load_if_exists=True,
@@ -492,15 +627,12 @@ def main():
         )
     )
     
-    # Initial backup
-    backup_study_database()
-    
     try:
         # Run optimization - more trials for thorough search
-        study.optimize(objective, n_trials=20, timeout=None)
+        study.optimize(objective, n_trials=N_TRIALS, timeout=None)
         
         print(f"\n🏆 OPTIMIZATION COMPLETE!")
-        print(f"🥇 Best mAP50-95: {study.best_value:.4f}")
+        print(f"🥇 Best F1 Score: {study.best_value:.4f}")
         print(f"🔧 Best hyperparameters:")
         for param, value in study.best_params.items():
             print(f"   {param}: {value}")
@@ -530,13 +662,12 @@ def main():
             } for t in study.trials]
         }
         
-        with open(os.path.join(OUTPUT_DIR, "comprehensive_final_results.json"), "w") as f:
+        with open(os.path.join(OUTPUT_DIR, "final_summary.json"), "w") as f:
             json.dump(final_results, f, indent=2)
         
-        print(f"\n💾 Complete results saved to: {OUTPUT_DIR}/comprehensive_final_results.json")
+        print(f"\n💾 Complete results saved to: {OUTPUT_DIR}/final_summary.json")
         print(f"📁 Best model directory: {OUTPUT_DIR}/trial_{study.best_trial.number:03d}/")
         print(f"📊 Study database: {OUTPUT_DIR}/study.db")
-        print(f"🔄 Study database backups: {OUTPUT_DIR}/backups/")
         
         # Print optimization insights
         print(f"\n📈 Optimization Insights:")
@@ -544,8 +675,6 @@ def main():
         total_time = sum(t.duration.total_seconds() for t in study.trials if t.duration) / 3600
         print(f"   Total optimization time: {total_time:.1f} hours ({total_time/24:.1f} days)")
         
-        # Final backup
-        backup_study_database()
         
         return study.best_params
         
@@ -559,7 +688,7 @@ def main():
             'interruption_time': datetime.now().isoformat(),
             'status': 'interrupted',
             'completed_trials': len([t for t in study.trials if t.state == optuna.trial.TrialState.COMPLETE]),
-            'total_planned_trials': 20,
+            'total_planned_trials': N_TRIALS,
             'current_best_score': study.best_value if study.best_value else None,
             'current_best_params': study.best_params if study.best_params else None,
             'partial_optimization_hours': sum(t.duration.total_seconds() for t in study.trials if t.duration) / 3600,
@@ -569,18 +698,12 @@ def main():
         with open(os.path.join(OUTPUT_DIR, "interrupted_state.json"), "w") as f:
             json.dump(interrupted_results, f, indent=2)
         
-        # Emergency backup
-        backup_study_database()
-        
         print(f"💾 Interrupted state saved. Resume by re-running the same script.")
         return None
         
     except Exception as e:
         print(f"\n❌ Optimization failed: {str(e)}")
         print(f"💾 Partial results saved to: {OUTPUT_DIR}/")
-        
-        # Emergency backup
-        backup_study_database()
         
         return None
 

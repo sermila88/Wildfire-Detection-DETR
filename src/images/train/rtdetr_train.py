@@ -25,9 +25,7 @@ project_root = "/vol/bitbucket/si324/rf-detr-wildfire"
 outputs_root = os.path.join(project_root, "src/images/outputs")
 experiment_dir = os.path.join(outputs_root, EXPERIMENT_NAME)
 checkpoints_dir = os.path.join(experiment_dir, "checkpoints")
-plots_dir = os.path.join(experiment_dir, "plots")
 logs_dir = os.path.join(experiment_dir, "logs")
-eval_results_dir = os.path.join(experiment_dir, "eval_results")
 
 # ============================================================================
 # TRAINING SETUP
@@ -40,9 +38,7 @@ def main():
     
     # Create directory structure
     os.makedirs(checkpoints_dir, exist_ok=True)
-    os.makedirs(plots_dir, exist_ok=True)
     os.makedirs(logs_dir, exist_ok=True)
-    os.makedirs(eval_results_dir, exist_ok=True)
     
     # Load RT-DETR model (pre-trained on COCO)
     # RT-DETR-X: Higher accuracy (54.8 mAP) better for small smoke detection
@@ -96,7 +92,6 @@ def main():
     print(f"RT-DETR training completed!")
     print(f"Checkpoints saved to: {checkpoints_dir}/")
     print(f"Best model: {checkpoints_dir}/weights/best.pt")
-    print(f"Training plots: {checkpoints_dir}/results.png")
     
     
     return results

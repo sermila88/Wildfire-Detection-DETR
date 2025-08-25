@@ -17,22 +17,22 @@ from datetime import datetime
 # ============================================================================
 # CONFIGURATION
 # ============================================================================
-EXPERIMENT_NAME = "rfdetr_smoke_detection_v1_IoU=0.01"
+EXPERIMENT_NAME = "RF-DETR_initial_training"
 PROJECT_ROOT = "/vol/bitbucket/si324/rf-detr-wildfire"
 
 # Dataset paths
-DATASET_PATH = f"{PROJECT_ROOT}/data/pyro25img/images/test"
+DATASET_PATH = f"{PROJECT_ROOT}/src/images/data/pyro25img/images/test"
 ANNOTATIONS_PATH = f"{DATASET_PATH}/_annotations.coco.json"
 
 # Output paths
-EXPERIMENT_DIR = f"{PROJECT_ROOT}/outputs/{EXPERIMENT_NAME}"
+EXPERIMENT_DIR = f"{PROJECT_ROOT}/src/images/outputs/{EXPERIMENT_NAME}"
 CHECKPOINTS_DIR = f"{EXPERIMENT_DIR}/checkpoints"
 EVAL_RESULTS_DIR = f"{EXPERIMENT_DIR}/eval_results"
 PLOTS_DIR = f"{EXPERIMENT_DIR}/plots"
 
 # Evaluation parameters 
 CONFIDENCE_THRESHOLDS = np.arange(0.1, 0.9, 0.05)
-IOU_THRESHOLD = 0.01  
+IOU_THRESHOLD = 0.1  
 
 # Create output directories
 os.makedirs(EVAL_RESULTS_DIR, exist_ok=True)
@@ -40,7 +40,6 @@ os.makedirs(PLOTS_DIR, exist_ok=True)
 
 print(f"🎯 RF-DETR Wildfire Smoke Detection Evaluation")
 print(f"📁 Experiment: {EXPERIMENT_NAME}")
-
 
 # ============================================================================
 # PYRONEAR UTILITY FUNCTIONS
@@ -108,7 +107,7 @@ def save_predictions_yolo_format(preds, output_path, img_width, img_height):
 
 def load_yolo_baseline():
     """Load YOLO baseline (image + object level) from saved summary JSON."""
-    path = f"{PROJECT_ROOT}/outputs/yolo_baseline_v1_IoU=0.01/eval_results/summary_results.json"
+    path = f"{PROJECT_ROOT}/src/images/outputs/yolo_baseline_v1_IoU=0.1/eval_results/summary_results.json"
     try:
         with open(path, "r") as f:
             data = json.load(f)
@@ -128,14 +127,14 @@ def load_yolo_baseline():
             },
         }
         print(
-            f"✅ Loaded YOLO baseline @IoU={baseline['iou_threshold']}: "
+            f" Loaded YOLO baseline @IoU={baseline['iou_threshold']}: "
             f"image-F1={baseline['image']['metrics']['f1_score']:.3f} "
             f"(thr={baseline['image']['best_threshold']})"
         )
         return baseline
 
     except FileNotFoundError:
-        print(f"⚠️  YOLO baseline file not found at:\n    {path}")
+        print(f" YOLO baseline file not found at:\n    {path}")
         return {
             "experiment_name": "yolo_baseline_fallback",
             "iou_threshold": IOU_THRESHOLD,
@@ -151,7 +150,6 @@ def load_yolo_baseline():
             },
         }
 
-
 # ============================================================================
 # MODEL INITIALIZATION
 # ============================================================================
@@ -160,10 +158,10 @@ def load_model():
     checkpoint_path = f"{CHECKPOINTS_DIR}/checkpoint_best_ema.pth"
     
     if not os.path.exists(checkpoint_path):
-        print(f"❌ Checkpoint not found: {checkpoint_path}")
+        print(f" Checkpoint not found: {checkpoint_path}")
         exit(1)
     
-    print(f"✅ Loading RF-DETR from: {checkpoint_path}")
+    print(f" Loading RF-DETR from: {checkpoint_path}")
     model = RFDETRBase(pretrain_weights=checkpoint_path, num_classes=1)
     return model
 
@@ -174,7 +172,7 @@ def load_dataset():
 
     """Load all test images (both annotated and non-annotated)"""
     if not os.path.exists(ANNOTATIONS_PATH):
-        print(f"❌ Annotations not found: {ANNOTATIONS_PATH}")
+        print(f" Annotations not found: {ANNOTATIONS_PATH}")
         exit(1)
     
     # Load COCO dataset for annotated images
