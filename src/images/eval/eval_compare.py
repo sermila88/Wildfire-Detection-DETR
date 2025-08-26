@@ -1,6 +1,6 @@
 import glob
 import os
-from utils import xywh2xyxy, box_iou
+from pyronear_utils import xywh2xyxy, box_iou
 import numpy as np
 import matplotlib.pyplot as plt
 import pandas as pd
@@ -12,11 +12,13 @@ import cv2
 from tqdm import tqdm
 import supervision as sv
 import shutil
+import seaborn as sns
 
 # Configuration
 OUTPUT_BASE_DIR = "/vol/bitbucket/si324/rf-detr-wildfire/src/images/eval_results"
 TEST_IMAGES_DIR = "/vol/bitbucket/si324/rf-detr-wildfire/src/images/data/pyro25img/images/test"
 GT_FOLDER = "/vol/bitbucket/si324/rf-detr-wildfire/src/images/data/pyro25img/labels/test"
+
 
 def generate_yolo_predictions(model_path, output_dir):
     """Generate YOLO predictions ONCE at conf=0.01 same as baseline"""
@@ -129,12 +131,12 @@ def evaluate_predictions(pred_folder, gt_folder, conf_th=0.1, cat=None):
                 pred_box = xywh2xyxy(np.array([x, y, w, h]))
 
                 if gt_boxes:
-                    # Encontrar la mejor coincidencia por IoU
+                    # Find the best match by IoU
                     iou_values = [box_iou(pred_box, gt_box) for gt_box in gt_boxes]
                     max_iou = max(iou_values)
                     best_match_idx = np.argmax(iou_values)
 
-                    # Verificar coincidencia válida y única
+                    # Check for valid and unique match
                     if max_iou > 0.1 and not gt_matches[best_match_idx]:
                         nb_tp += 1
                         gt_matches[best_match_idx] = True
@@ -154,7 +156,41 @@ def evaluate_predictions(pred_folder, gt_folder, conf_th=0.1, cat=None):
         else 0
     )
 
-    return {"precision": precision, "recall": recall, "f1_score": f1_score}
+    return {
+        "precision": precision, 
+        "recall": recall, 
+        "f1_score": f1_score,
+        "tp": nb_tp,
+        "fp": nb_fp, 
+        "fn": nb_fn
+    }
+
+def save_predictions_by_threshold(pred_dir, output_base_dir, conf_threshold):
+    """Save filtered predictions at each threshold for inspection"""
+    threshold_dir = os.path.join(output_base_dir, "preds_by_threshold", f"conf_{conf_threshold:.2f}")
+    os.makedirs(threshold_dir, exist_ok=True)
+    
+    # Get all prediction files
+    pred_files = glob.glob(os.path.join(pred_dir, "*.txt"))
+    
+    for pred_file in pred_files:
+        filename = os.path.basename(pred_file)
+        output_file = os.path.join(threshold_dir, filename)
+        
+        filtered_lines = []
+        if os.path.exists(pred_file) and os.path.getsize(pred_file) > 0:
+            with open(pred_file, 'r') as f:
+                for line in f.readlines():
+                    parts = line.strip().split()
+                    if len(parts) >= 6:
+                        conf = float(parts[5])
+                        if conf >= conf_threshold:
+                            filtered_lines.append(line.strip())
+        
+        # Write filtered predictions (or empty file if no predictions above threshold)
+        with open(output_file, 'w') as f:
+            if filtered_lines:
+                f.write('\n'.join(filtered_lines))
 
 
 def evaluate_model(model_name, model_type, model_path, conf_thres_range):
@@ -209,12 +245,7 @@ def evaluate_model(model_name, model_type, model_path, conf_thres_range):
                 if yolo_lines:
                     f.write('\n'.join(yolo_lines))
 
-    final_pred_dir = os.path.join(pred_base_dir, "predictions_conf_0.01")
-    if os.path.exists(pred_dir) and pred_dir != final_pred_dir:
-        shutil.copytree(pred_dir, final_pred_dir, dirs_exist_ok=True)
-        print(f"Saved predictions to: {final_pred_dir}")
-    
-    # Now evaluate at different thresholds using the SAME predictions
+    # Evaluate at different thresholds 
     all_results = []
     best_results = None
     best_conf = 0
@@ -223,6 +254,9 @@ def evaluate_model(model_name, model_type, model_path, conf_thres_range):
         results = evaluate_predictions(pred_dir, GT_FOLDER, conf_threshold)
         results['confidence_threshold'] = conf_threshold
         all_results.append(results)
+
+        # Save filtered predictions at this threshold
+        save_predictions_by_threshold(pred_dir, pred_base_dir, conf_threshold)
         
         if results['f1_score'] > (best_results['f1_score'] if best_results else 0):
             best_results = results
@@ -230,6 +264,11 @@ def evaluate_model(model_name, model_type, model_path, conf_thres_range):
     
     # Save results
     save_results(best_results, best_conf, all_results, model_output_dir, model_name, plots_dir)
+
+    # Create confusion matrix 
+    if 'tp' in best_results:
+        cm_path = create_object_confusion_matrix(best_results, model_name, plots_dir)
+        print(f"Confusion matrix saved: {cm_path}")
 
     # Generate bounding box visualizations at best threshold
     generate_bounding_boxes(model_name, model_type, pred_dir, best_conf)
@@ -250,13 +289,21 @@ def save_results(best_results, best_conf, all_results, output_dir, model_name, p
     plt.plot(conf_thresholds, precisions, label="Precision", color="green", linestyle="--")
     plt.plot(conf_thresholds, recalls, label="Recall", color="red", linestyle="-.")
     
-    plt.scatter(best_conf, best_results['f1_score'], color="blue", s=100, edgecolor="k", zorder=5)
+    plt.scatter(best_conf, best_results['f1_score'], color="blue", s=150, marker = '*', edgecolor="black", zorder=6)
     plt.scatter(best_conf, best_results['precision'], color="green", s=100, edgecolor="k", zorder=5)
     plt.scatter(best_conf, best_results['recall'], color="red", s=100, edgecolor="k", zorder=5)
     
-    plt.text(best_conf, best_results['f1_score'],
-            f" Best F1: {best_results['f1_score']:.2f}\n Precision: {best_results['precision']:.2f}\n Recall: {best_results['recall']:.2f}",
-            fontsize=9, verticalalignment="bottom")
+    plt.text(best_conf + 0.02, best_results['f1_score'],
+            f"Best F1: {best_results['f1_score']:.2f}",
+            fontsize=9, ha='left', va='center', color='blue', weight='bold')
+    
+    plt.text(best_conf + 0.02, best_results['precision'],
+            f"Precision: {best_results['precision']:.2f}",
+            fontsize=9, ha='left', va='center', color='green', weight='bold')
+    
+    plt.text(best_conf + 0.02, best_results['recall'],
+            f"Recall: {best_results['recall']:.2f}",
+            fontsize=9, ha='left', va='center', color='red', weight='bold')
     
     plt.title(f"{model_name}: F1 Score, Precision, and Recall vs. Confidence Threshold")
     plt.xlabel("Confidence Threshold")
@@ -290,6 +337,37 @@ def save_results(best_results, best_conf, all_results, output_dir, model_name, p
         f.write(f"Best F1 Score: {best_results['f1_score']:.4f}\n")
         f.write(f"Best Precision: {best_results['precision']:.4f}\n")
         f.write(f"Best Recall: {best_results['recall']:.4f}\n")
+        if 'tp' in best_results:
+            f.write(f"\nConfusion Matrix:\n")
+            f.write(f"TP: {int(best_results['tp'])}\n")
+            f.write(f"FP: {int(best_results['fp'])}\n")
+            f.write(f"FN: {int(best_results['fn'])}\n")
+            f.write(f"TN: N/A (not applicable for object detection)\n")
+
+def create_object_confusion_matrix(best_results, model_name, plots_dir):
+    """Create object-level confusion matrix visualization"""
+    # Check if we have the counts
+    if 'tp' not in best_results or 'fp' not in best_results or 'fn' not in best_results:
+        print("Warning: No counts available for confusion matrix")
+        return None
+    
+    # Create numeric matrix for heatmap
+    cm_numeric = np.array([[best_results["tp"], best_results["fn"]],
+                          [best_results["fp"], 0]])
+    
+    # Create annotation matrix with N/A
+    cm_labels = np.array([[str(int(best_results["tp"])), str(int(best_results["fn"]))],
+                         [str(int(best_results["fp"])), "N/A"]])
+    
+    plt.figure(figsize=(6, 5))
+    sns.heatmap(cm_numeric, annot=cm_labels, fmt="", cmap="Oranges",
+                xticklabels=["Pred Fire", "Pred No Fire"],
+                yticklabels=["GT Fire", "GT No Fire"])
+    plt.title(f"{model_name} – Object-Level Confusion Matrix (TN = N/A, IoU=0.1)")
+    out = os.path.join(plots_dir, "object_conf_matrix.png")
+    plt.savefig(out, dpi=150, bbox_inches="tight")
+    plt.close()
+    return out
 
 def classify_image_boxes(pred_file, gt_file, conf_threshold):
     """Mirror exact logic from evaluate_predictions to classify boxes"""
@@ -315,7 +393,7 @@ def classify_image_boxes(pred_file, gt_file, conf_threshold):
                         pred_box = xywh2xyxy(np.array([x, y, w, h]))
                         pred_data.append({'box': pred_box, 'conf': conf, 'type': None})
     
-    # Match predictions to GT - EXACT SAME LOGIC as evaluate_predictions
+    # Match predictions to GT 
     gt_matched = [False] * len(gt_boxes)
     
     for pred in pred_data:
@@ -324,7 +402,6 @@ def classify_image_boxes(pred_file, gt_file, conf_threshold):
             max_iou = max(iou_values)
             best_match_idx = np.argmax(iou_values)
             
-            # EXACT matching logic from evaluate_predictions
             if max_iou > 0.1 and not gt_matched[best_match_idx]:
                 pred['type'] = 'TP'
                 gt_matched[best_match_idx] = True
@@ -365,7 +442,7 @@ def generate_bounding_boxes(model_name, model_type, pred_dir, best_conf):
         if not has_tp and not has_fp and not has_fn:
             continue
         
-        # Save to ALL relevant folders
+        # Save to relevant folders
         folders_to_save = []
         if has_tp:
             folders_to_save.append("TP")
@@ -383,7 +460,7 @@ def generate_bounding_boxes(model_name, model_type, pred_dir, best_conf):
 
 def draw_bounding_boxes(image_path, pred_file, gt_file, box_classifications, 
                         output_path, model_name, conf_threshold, folder_type):
-    """Draw bounding boxes with colors based on actual TP/FP classification"""
+    """Draw bounding boxes with colors based on the TP/FP classification"""
     image = cv2.imread(image_path)
     if image is None:
         return
