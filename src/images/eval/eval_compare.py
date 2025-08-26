@@ -272,6 +272,9 @@ def evaluate_model(model_name, model_type, model_path, conf_thres_range):
 
     # Generate bounding box visualizations at best threshold
     generate_bounding_boxes(model_name, model_type, pred_dir, best_conf)
+
+    # Create visualization summary
+    create_visualization_summary(model_name, model_type, pred_dir, best_conf)
     
     return best_results, best_conf
 
@@ -321,9 +324,20 @@ def save_results(best_results, best_conf, all_results, output_dir, model_name, p
         "best_results": {
             "f1_score": float(best_results['f1_score']),
             "precision": float(best_results['precision']),
-            "recall": float(best_results['recall'])
+            "recall": float(best_results['recall']),
+            "tp": int(best_results['tp']) if 'tp' in best_results else None,
+            "fp": int(best_results['fp']) if 'fp' in best_results else None,
+            "fn": int(best_results['fn']) if 'fn' in best_results else None
         },
-        "all_results": all_results
+        "all_results": [{
+            "confidence_threshold": float(r['confidence_threshold']),
+            "f1_score": float(r['f1_score']),
+            "precision": float(r['precision']),
+            "recall": float(r['recall']),
+            "tp": int(r['tp']) if 'tp' in r else None,
+            "fp": int(r['fp']) if 'fp' in r else None,
+            "fn": int(r['fn']) if 'fn' in r else None
+        } for r in all_results]
     }
     
     with open(os.path.join(output_dir, "evaluation_summary.json"), 'w') as f:
@@ -457,6 +471,69 @@ def generate_bounding_boxes(model_name, model_type, pred_dir, best_conf):
             draw_bounding_boxes(img_path, pred_file, gt_file, box_classifications, 
                               output_path, model_name, best_conf, folder)
 
+def create_visualization_summary(model_name, model_type, pred_dir, best_conf):
+    """Create a summary file for all bounding box folders"""
+    bbox_dir = os.path.join(OUTPUT_BASE_DIR, model_name, f"predicted_bounding_boxes_{model_type}")
+    
+    summary = {
+        "model_name": model_name,
+        "best_confidence_threshold": float(best_conf),
+        "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "folder_contents": {}
+    }
+    
+    # Count detections in each folder
+    for folder_type in ['TP', 'FP', 'FN']:
+        folder_path = os.path.join(bbox_dir, folder_type)
+        images_in_folder = glob.glob(os.path.join(folder_path, "*.jpg"))
+        
+        tp_count = fp_count = fn_count = 0
+        
+        for img_path in images_in_folder:
+            img_name = os.path.splitext(os.path.basename(img_path))[0]
+            gt_file = os.path.join(GT_FOLDER, f"{img_name}.txt")
+            pred_file = os.path.join(pred_dir, f"{img_name}.txt")
+            
+            box_classifications = classify_image_boxes(pred_file, gt_file, best_conf)
+            pred_data, gt_matched, (has_tp, has_fp, has_fn) = box_classifications
+            
+            if has_tp:
+                tp_count += sum(1 for p in pred_data if p['type'] == 'TP')
+            if has_fp:
+                fp_count += sum(1 for p in pred_data if p['type'] == 'FP')
+            if has_fn:
+                fn_count += sum(1 for matched in gt_matched if not matched)
+        
+        summary["folder_contents"][folder_type] = {
+            "num_images": len(images_in_folder),
+            "total_tp_boxes": tp_count,
+            "total_fp_boxes": fp_count,
+            "total_fn_boxes": fn_count,
+            "note": f"Images in this folder contain at least one {folder_type} detection"
+        }
+    
+    # Save summary as JSON
+    summary_path = os.path.join(bbox_dir, "visualization_summary.json")
+    with open(summary_path, 'w') as f:
+        json.dump(summary, f, indent=2)
+    
+    # Also save as text for easy reading
+    summary_txt_path = os.path.join(bbox_dir, "visualization_summary.txt")
+    with open(summary_txt_path, 'w') as f:
+        f.write(f"Visualization Summary for {model_name}\n")
+        f.write(f"{'='*60}\n")
+        f.write(f"Generated: {summary['timestamp']}\n")
+        f.write(f"Best confidence threshold: {best_conf:.3f}\n\n")
+        
+        for folder, data in summary["folder_contents"].items():
+            f.write(f"{folder} Folder:\n")
+            f.write(f"  Images: {data['num_images']}\n")
+            f.write(f"  Total TP boxes: {data['total_tp_boxes']}\n")
+            f.write(f"  Total FP boxes: {data['total_fp_boxes']}\n")
+            f.write(f"  Total FN boxes: {data['total_fn_boxes']}\n")
+            f.write(f"  Note: {data['note']}\n\n")
+    
+    print(f"Visualization summary saved: {summary_path}")
 
 def draw_bounding_boxes(image_path, pred_file, gt_file, box_classifications, 
                         output_path, model_name, conf_threshold, folder_type):
@@ -485,10 +562,10 @@ def draw_bounding_boxes(image_path, pred_file, gt_file, box_classifications,
                     # Yellow for matched GT (part of TP), cyan for unmatched GT (FN)
                     if i < len(gt_matched) and gt_matched[i]:
                         cv2.rectangle(image, (x1, y1), (x2, y2), (0, 255, 255), 2)  # Yellow
-                        cv2.putText(image, "GT-matched", (x1, y1-5), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 255), 2)
+                        cv2.putText(image, "GT-matched", (x1, y1-5), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 255), 2)
                     else:
                         cv2.rectangle(image, (x1, y1), (x2, y2), (255, 255, 0), 2)  # Cyan for FN
-                        cv2.putText(image, "GT-missed", (x1, y1-5), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 0), 2)
+                        cv2.putText(image, "GT-missed", (x1, y1-5), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 0), 2)
     
     # Draw predictions with their actual TP/FP classification
     if os.path.isfile(pred_file) and os.path.getsize(pred_file) > 0:
@@ -514,7 +591,7 @@ def draw_bounding_boxes(image_path, pred_file, gt_file, box_classifications,
                             
                             cv2.rectangle(image, (x1, y1), (x2, y2), color, 2)
                             label = f"{box_type}: {conf:.2f}"
-                            cv2.putText(image, label, (x1, y2+20), cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
+                            cv2.putText(image, label, (x1, y2+20), cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2)
                         pred_idx += 1
     
     # Add header with all info
@@ -525,8 +602,8 @@ def draw_bounding_boxes(image_path, pred_file, gt_file, box_classifications,
     if has_fn: types.append("FN")
     header += "/".join(types) + f" | Saved in: {folder_type}"
     
-    cv2.rectangle(image, (0, 0), (img_width, 30), (0, 0, 0), -1)
-    cv2.putText(image, header, (10, 20), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 2)
+    cv2.rectangle(image, (0, 0), (img_width, 35), (0, 0, 0), -1)
+    cv2.putText(image, header, (10, 20), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
     cv2.imwrite(output_path, image)
 
 def find_best_conf_threshold(pred_folder, gt_folder, conf_thres_range, cat=None):
