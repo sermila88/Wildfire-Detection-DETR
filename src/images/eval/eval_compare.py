@@ -485,43 +485,21 @@ def create_visualization_summary(model_name, model_type, pred_dir, best_conf):
     """Create a summary file for all bounding box folders"""
     bbox_dir = os.path.join(OUTPUT_BASE_DIR, model_name, f"predicted_bounding_boxes_{model_type}")
     
+    # Simple count of images in each folder
+    tp_folder = os.path.join(bbox_dir, "TP")
+    fp_folder = os.path.join(bbox_dir, "FP")
+    fn_folder = os.path.join(bbox_dir, "FN")
+    
     summary = {
         "model_name": model_name,
         "best_confidence_threshold": float(best_conf),
         "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-        "folder_contents": {}
-    }
-    
-    # Count detections in each folder
-    for folder_type in ['TP', 'FP', 'FN']:
-        folder_path = os.path.join(bbox_dir, folder_type)
-        images_in_folder = glob.glob(os.path.join(folder_path, "*.jpg"))
-        
-        tp_count = fp_count = fn_count = 0
-        
-        for img_path in images_in_folder:
-            img_name = os.path.splitext(os.path.basename(img_path))[0]
-            gt_file = os.path.join(GT_FOLDER, f"{img_name}.txt")
-            pred_file = os.path.join(pred_dir, f"{img_name}.txt")
-            
-            box_classifications = classify_image_boxes(pred_file, gt_file, best_conf)
-            pred_data, gt_matched, (has_tp, has_fp, has_fn) = box_classifications
-            
-            if has_tp:
-                tp_count += sum(1 for p in pred_data if p['type'] == 'TP')
-            if has_fp:
-                fp_count += sum(1 for p in pred_data if p['type'] == 'FP')
-            if has_fn:
-                fn_count += sum(1 for matched in gt_matched if not matched)
-        
-        summary["folder_contents"][folder_type] = {
-            "num_images": len(images_in_folder),
-            "total_tp_boxes": tp_count,
-            "total_fp_boxes": fp_count,
-            "total_fn_boxes": fn_count,
-            "note": f"Images in this folder contain at least one {folder_type} detection"
+        "image_counts": {
+            "TP": len(glob.glob(os.path.join(tp_folder, "*.jpg"))),
+            "FP": len(glob.glob(os.path.join(fp_folder, "*.jpg"))),
+            "FN": len(glob.glob(os.path.join(fn_folder, "*.jpg")))
         }
-    
+    }
     # Save summary as JSON
     summary_path = os.path.join(bbox_dir, "visualization_summary.json")
     with open(summary_path, 'w') as f:
@@ -534,14 +512,10 @@ def create_visualization_summary(model_name, model_type, pred_dir, best_conf):
         f.write(f"{'='*60}\n")
         f.write(f"Generated: {summary['timestamp']}\n")
         f.write(f"Best confidence threshold: {best_conf:.3f}\n\n")
-        
-        for folder, data in summary["folder_contents"].items():
-            f.write(f"{folder} Folder:\n")
-            f.write(f"  Images: {data['num_images']}\n")
-            f.write(f"  Total TP boxes: {data['total_tp_boxes']}\n")
-            f.write(f"  Total FP boxes: {data['total_fp_boxes']}\n")
-            f.write(f"  Total FN boxes: {data['total_fn_boxes']}\n")
-            f.write(f"  Note: {data['note']}\n\n")
+        f.write(f"Images saved:\n")
+        f.write(f"  TP folder: {summary['image_counts']['TP']} images\n")
+        f.write(f"  FP folder: {summary['image_counts']['FP']} images\n")
+        f.write(f"  FN folder: {summary['image_counts']['FN']} images\n")
     
     print(f"Visualization summary saved: {summary_path}")
 
@@ -604,7 +578,9 @@ def draw_bounding_boxes(image_path, pred_file, gt_file, box_classifications,
                             cv2.rectangle(image, (x1, y1), (x2, y2), color, thickness)
                             iou_val = pred_data[pred_idx]['iou'] if 'iou' in pred_data[pred_idx] else 0.0
                             label = f"{box_type}: IoU={float(iou_val):.2f}"
-                            cv2.putText(image, label, (x1, y2+20), cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2)
+                            label_offset = 20 + (pred_idx * 25)
+                            cv2.putText(image, label, (x1, min(y2 + label_offset, img_height - 10)), 
+                                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 1)
                         pred_idx += 1
     
     # Add header with all info
@@ -747,15 +723,16 @@ def find_best_conf_threshold_and_plot(
 def create_comparison_visualizations(all_model_results, all_results_data, output_dir):
     """Create comparison plots for all models"""
     
-    # Color schemes - shades of same color per model
-    colors = {
-        'YOLO_baseline': {'main': '#2E7D32', 'f1': '#388E3C', 'precision': '#4CAF50', 'recall': '#66BB6A'},
-        'RF-DETR_initial_training': {'main': '#6A1B9A', 'f1': '#7B1FA2', 'precision': '#8E24AA', 'recall': '#9C27B0'},
-        'RT-DETR_initial_training': {'main': '#1565C0', 'f1': '#1976D2', 'precision': '#1E88E5', 'recall': '#2196F3'}
-    }
     model_labels = ['YOLO', 'RF-DETR', 'RT-DETR']
     models = list(all_model_results.keys())
-    
+
+    # Consistent colors across models
+    bar_colors = {
+        'f1': '#1976D2',      # Blue for F1
+        'precision': '#4CAF50', # Green for Precision  
+        'recall': '#F44336'    # Red for Recall
+    }
+
     # 1. GROUPED BAR CHART - F1, Precision, Recall
     fig, ax = plt.subplots(figsize=(12, 7))
     metrics = ['F1 Score', 'Precision', 'Recall']
@@ -763,15 +740,13 @@ def create_comparison_visualizations(all_model_results, all_results_data, output
     color_keys = ['f1', 'precision', 'recall']
     x = np.arange(len(models))
     width = 0.25
-    
+
     for i, metric in enumerate(metric_keys):
         values = [all_model_results[m][metric] for m in models]
         positions = x + i * width
-        bars = ax.bar(positions, values, width, label=metrics[i])
-        
-        # Apply gradient colors per model
+        color = bar_colors[color_keys[i]]
+        bars = ax.bar(positions, values, width, label=metrics[i], color=color)
         for j, bar in enumerate(bars):
-            bar.set_color(colors[models[j]][color_keys[i]])
             conf = all_model_results[models[j]]['best_conf']
             height = bar.get_height()
             # Only show conf on F1 bars
@@ -791,44 +766,55 @@ def create_comparison_visualizations(all_model_results, all_results_data, output
     ax.set_xticklabels(model_labels)
     ax.legend(loc='upper right', frameon=True, shadow=True)
     ax.grid(True, alpha=0.3, linestyle='--', axis='y')
-    ax.set_ylim([0, 1.08])
+    ax.set_ylim([0.5, 1.08])
     plt.tight_layout()
     plt.savefig(os.path.join(output_dir, "model_comparison_bars.png"), dpi=300, bbox_inches='tight')
     plt.close()
     
-    # 2. PR CURVES - Clean without isolines
-    fig, ax = plt.subplots(figsize=(11, 8))
+    # 2. THRESHOLD ANALYSIS - All metrics for all models
+    fig, axes = plt.subplots(1, 3, figsize=(18, 6))
+    model_colors = {
+        'YOLO_baseline': '#2E7D32',
+        'RF-DETR_initial_training': '#6A1B9A', 
+        'RT-DETR_initial_training': '#1565C0'
+    }
 
-    for i, (model_name, results_list) in enumerate(all_results_data.items()):
-        precisions = [r['precision'] for r in results_list]
-        recalls = [r['recall'] for r in results_list]
-        
-        sorted_indices = np.argsort(recalls)
-        recalls_sorted = [recalls[j] for j in sorted_indices]
-        precisions_sorted = [precisions[j] for j in sorted_indices]
-        
-        # Main curve
-        ax.plot(recalls_sorted, precisions_sorted, 
-                label=model_labels[i], color=colors[model_name]['main'], 
-                linewidth=2.5, alpha=0.9)
-        
-        # Best F1 point
-        best_idx = np.argmax([r['f1_score'] for r in results_list])
-        ax.scatter(results_list[best_idx]['recall'], 
-                results_list[best_idx]['precision'],
-                s=300, color=colors[model_name]['main'], marker='*', 
-                edgecolors='white', linewidth=2.5, zorder=5,
-                label=f'{model_labels[i]} Best (F1={results_list[best_idx]["f1_score"]:.3f})')
+    metrics = ['f1_score', 'precision', 'recall']
+    metric_titles = ['F1 Score', 'Precision', 'Recall']
 
-    ax.set_xlabel('Recall', fontsize=12, fontweight='bold')
-    ax.set_ylabel('Precision', fontsize=12, fontweight='bold')
-    ax.set_title('Precision-Recall Curves', fontsize=14, fontweight='bold')
-    ax.legend(loc='lower left', frameon=True, shadow=True, fontsize=10)
-    ax.grid(True, alpha=0.25, linestyle=':', linewidth=0.5)
-    ax.set_xlim([0, 1.02])
-    ax.set_ylim([0, 1.02])
+    for idx, (metric, title) in enumerate(zip(metrics, metric_titles)):
+        ax = axes[idx]
+        
+        for model_name, results_list in all_results_data.items():
+            conf_thresholds = [r['confidence_threshold'] for r in results_list]
+            values = [r[metric] for r in results_list]
+            
+            model_label = model_labels[list(all_results_data.keys()).index(model_name)]
+            ax.plot(conf_thresholds, values, 
+                    label=model_label, 
+                    color=model_colors[model_name],
+                    linewidth=2.5, marker='o', markersize=4)
+            
+            # Mark best F1 point
+            best_idx = np.argmax([r['f1_score'] for r in results_list])
+            best_conf = results_list[best_idx]['confidence_threshold']
+            best_value = results_list[best_idx][metric]
+            
+            ax.scatter(best_conf, best_value, 
+                    s=200, color=model_colors[model_name], 
+                    marker='*', edgecolors='black', linewidth=1.5, zorder=5)
+        
+        ax.set_xlabel('Confidence Threshold', fontsize=11)
+        ax.set_ylabel(title, fontsize=11)
+        ax.set_title(f'{title} vs Confidence Threshold', fontsize=12, fontweight='bold')
+        ax.legend(loc='best')
+        ax.grid(True, alpha=0.3)
+        ax.set_xlim([0.05, 0.9])
+        ax.set_ylim([0, 1.02])
+
+    plt.suptitle('Threshold Analysis Comparison', fontsize=14, fontweight='bold')
     plt.tight_layout()
-    plt.savefig(os.path.join(output_dir, "pr_curves.png"), dpi=300, bbox_inches='tight')
+    plt.savefig(os.path.join(output_dir, "threshold_analysis_comparison.png"), dpi=300, bbox_inches='tight')
     plt.close()
         
     # 3. DETECTION BREAKDOWN - Grouped bars
@@ -901,9 +887,9 @@ if __name__ == "__main__":
             "precision": best_results['precision'],
             "recall": best_results['recall'],
             "best_conf": best_conf,
-            "tp": best_results.get('tp', 0),  
-            "fp": best_results.get('fp', 0),
-            "fn": best_results.get('fn', 0)
+            "tp": int(best_results.get('tp', 0)),  
+            "fp": int(best_results.get('fp', 0)),
+            "fn": int(best_results.get('fn', 0))
         }
 
         # Load the saved results for PR curves
