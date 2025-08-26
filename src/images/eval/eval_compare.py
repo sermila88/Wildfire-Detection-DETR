@@ -415,6 +415,8 @@ def classify_image_boxes(pred_file, gt_file, conf_threshold):
             iou_values = [box_iou(pred['box'], gt_box) for gt_box in gt_boxes]
             max_iou = max(iou_values)
             best_match_idx = np.argmax(iou_values)
+
+            pred['iou'] = max_iou  # Store the IoU value
             
             if max_iou > 0.1 and not gt_matched[best_match_idx]:
                 pred['type'] = 'TP'
@@ -423,6 +425,7 @@ def classify_image_boxes(pred_file, gt_file, conf_threshold):
                 pred['type'] = 'FP'
         else:
             pred['type'] = 'FP'
+            pred['iou'] = 0.0  # No GT boxes, so IoU is 0
     
     # Determine image classification for folder placement
     has_tp = any(p['type'] == 'TP' for p in pred_data)
@@ -590,7 +593,8 @@ def draw_bounding_boxes(image_path, pred_file, gt_file, box_classifications,
                                 color = (0, 0, 255)  # Red
                             
                             cv2.rectangle(image, (x1, y1), (x2, y2), color, 2)
-                            label = f"{box_type}: {conf:.2f}"
+                            iou_val = pred_data[pred_idx]['iou'] if 'iou' in pred_data[pred_idx] else 0.0
+                            label = f"{box_type}: IoU={iou_val:.2f}"
                             cv2.putText(image, label, (x1, y2+20), cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2)
                         pred_idx += 1
     
