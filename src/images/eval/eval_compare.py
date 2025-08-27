@@ -546,10 +546,10 @@ def draw_bounding_boxes(image_path, pred_file, gt_file, box_classifications,
                     # Yellow for matched GT (part of TP), cyan for unmatched GT (FN)
                     if i < len(gt_matched) and gt_matched[i]:
                         cv2.rectangle(image, (x1, y1), (x2, y2), (0, 255, 255), 2)  # Yellow
-                        cv2.putText(image, "GT-matched", (x1, y1-5), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 255), 2)
+                        cv2.putText(image, "GT-matched", (x1, y1-5), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 3)
                     else:
                         cv2.rectangle(image, (x1, y1), (x2, y2), (255, 255, 0), 2)  # Cyan for FN
-                        cv2.putText(image, "GT-missed", (x1, y1-5), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 0), 2)
+                        cv2.putText(image, "GT-missed", (x1, y1-5), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 0), 3)
     
     # Draw predictions with their actual TP/FP classification
     if os.path.isfile(pred_file) and os.path.getsize(pred_file) > 0:
@@ -578,9 +578,9 @@ def draw_bounding_boxes(image_path, pred_file, gt_file, box_classifications,
                             cv2.rectangle(image, (x1, y1), (x2, y2), color, thickness)
                             iou_val = pred_data[pred_idx]['iou'] if 'iou' in pred_data[pred_idx] else 0.0
                             label = f"{box_type}: IoU={float(iou_val):.2f}"
-                            label_offset = 20 + (pred_idx * 25)
+                            label_offset = 25 + (pred_idx * 30)
                             cv2.putText(image, label, (x1, min(y2 + label_offset, img_height - 10)), 
-                                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 1)
+                                        cv2.FONT_HERSHEY_SIMPLEX, 0.7, color, 3)
                         pred_idx += 1
     
     # Add header with all info
