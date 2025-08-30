@@ -15,7 +15,7 @@ import shutil
 import seaborn as sns
 
 # Configuration
-OUTPUT_BASE_DIR = "/vol/bitbucket/si324/rf-detr-wildfire/src/images/eval_results"
+OUTPUT_BASE_DIR = "/vol/bitbucket/si324/rf-detr-wildfire/src/images/eval_results_NMS"
 TEST_IMAGES_DIR = "/vol/bitbucket/si324/rf-detr-wildfire/src/images/data/pyro25img/images/test"
 GT_FOLDER = "/vol/bitbucket/si324/rf-detr-wildfire/src/images/data/pyro25img/labels/test"
 
@@ -40,6 +40,49 @@ def load_models(model_type, model_path):
         print(f"Loading RT-DETR from: {model_path}")
         return RTDETR(model_path)
     return None
+
+def apply_nms_to_predictions(pred_file, iou_threshold=0.01):
+    """Apply NMS to predictions matching YOLO's iou=0.01"""
+    
+    if not os.path.exists(pred_file) or os.path.getsize(pred_file) == 0:
+        return
+    
+    # Read all predictions
+    boxes = []
+    scores = []
+    lines = []
+    
+    with open(pred_file, 'r') as f:
+        for line in f.readlines():
+            parts = line.strip().split()
+            if len(parts) >= 6:
+                _, x, y, w, h, conf = map(float, parts)
+                # Convert to xyxy for NMS
+                x1 = x - w/2
+                y1 = y - h/2
+                x2 = x + w/2
+                y2 = y + h/2
+                boxes.append([x1, y1, x2, y2])
+                scores.append(conf)
+                lines.append(line.strip())
+    
+    if not boxes:
+        return
+    
+    # Apply NMS
+    indices = cv2.dnn.NMSBoxes(
+        bboxes=boxes,
+        scores=scores,
+        score_threshold=0.01,  # Keep all predictions above 0.01
+        nms_threshold=iou_threshold  # Remove boxes with IoU > 0.01
+    )
+    
+    # Write back filtered predictions
+    with open(pred_file, 'w') as f:
+        if len(indices) > 0:
+            indices = indices.flatten()
+            for i in indices:
+                f.write(lines[i] + '\n')
 
 def generate_rfdetr_predictions(model, image_path, conf_threshold):
     """Generate RF-DETR predictions"""
@@ -244,6 +287,13 @@ def evaluate_model(model_name, model_type, model_path, conf_thres_range):
             with open(pred_file, 'w') as f:
                 if yolo_lines:
                     f.write('\n'.join(yolo_lines))
+
+    # Apply NMS to predictions
+    if model_type in ["RF-DETR", "RT-DETR"]:
+        print(f"Applying NMS with IoU threshold 0.01 to {model_type} predictions...")
+        pred_files = glob.glob(os.path.join(pred_dir, "*.txt"))
+        for pred_file in tqdm(pred_files, desc="Applying NMS"):
+            apply_nms_to_predictions(pred_file, iou_threshold=0.01)
 
     # Evaluate at different thresholds 
     all_results = []
@@ -723,7 +773,7 @@ def find_best_conf_threshold_and_plot(
 def create_comparison_visualizations(all_model_results, all_results_data, output_dir):
     """Create comparison plots for all models"""
     
-    model_order = ['YOLO_baseline', 'RT-DETR_initial_training', 'RF-DETR_initial_training']
+    model_order = ['YOLO_baseline', 'RT-DETR_initial_training_NMS', 'RF-DETR_initial_training_NMS']
     model_labels = ['YOLOv8', 'RT-DETR', 'RF-DETR']
 
     # Consistent colors across models
@@ -777,8 +827,8 @@ def create_comparison_visualizations(all_model_results, all_results_data, output
     fig, axes = plt.subplots(1, 3, figsize=(18, 6))
     model_colors = {
         'YOLO_baseline': '#2E7D32',
-        'RF-DETR_initial_training': '#6A1B9A', 
-        'RT-DETR_initial_training': '#1565C0'
+        'RF-DETR_initial_training_NMS': '#6A1B9A', 
+        'RT-DETR_initial_training_NMS': '#1565C0'
     }
 
     metrics = ['f1_score', 'precision', 'recall']
@@ -863,11 +913,11 @@ if __name__ == "__main__":
             "type": "YOLO",
             "path": "/vol/bitbucket/si324/rf-detr-wildfire/src/images/outputs/YOLO_baseline/training_outputs/eager-flower-1/weights/best.pt"
         },
-        "RF-DETR_initial_training": {
+        "RF-DETR_initial_training_NMS": {
             "type": "RF-DETR",
             "path": "/vol/bitbucket/si324/rf-detr-wildfire/src/images/outputs/RF-DETR_initial_training/checkpoints/checkpoint_best_ema.pth"
         },
-        "RT-DETR_initial_training": {
+        "RT-DETR_initial_training_NMS": {
             "type": "RT-DETR",
             "path": "/vol/bitbucket/si324/rf-detr-wildfire/src/images/outputs/RT-DETR_initial_training/checkpoints/weights/best.pt"
         }
