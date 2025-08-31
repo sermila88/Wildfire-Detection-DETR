@@ -1,6 +1,7 @@
 #!/bin/bash
 #SBATCH --gres=gpu:1
 #SBATCH --mem=32G
+#SBATCH --partition=gpgpu,gpgpuB,a16gpu
 #SBATCH --mail-type=ALL 
 #SBATCH --mail-user=si324 
 #SBATCH --output=/vol/bitbucket/si324/rf-detr-wildfire/src/images/eval_results/logs/eval_compare-%j.out

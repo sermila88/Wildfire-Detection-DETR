@@ -24,6 +24,7 @@ predicted_bounding_boxes_RT-DETR
 RT-DETR_preds_yolo_format
 predicted_bounding_boxes_YOLO
 YOLO_predictions
+trial_results/
 
 
 # SLURM job outputs

@@ -1,0 +1,18 @@
+{
+  "best_trial": 20,
+  "best_f1": 0.8808664259927799,
+  "best_params": {
+    "resolution": 896,
+    "batch_size": 4,
+    "epochs": 25,
+    "lr": 3.7756581645088636e-05,
+    "lr_encoder": 2.4065267076500886e-05,
+    "weight_decay": 0.00010910079899995013,
+    "gradient_checkpointing": false,
+    "use_ema": true,
+    "grad_accum_steps": 4
+  },
+  "best_confidence": 0.25,
+  "total_trials": 24,
+  "timestamp": "2025-08-31T16:48:59.334267"
+}

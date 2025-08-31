@@ -1,12 +1,12 @@
 Model: RT-DETR_initial_training_NMS
 ==================================================
 Best Confidence Threshold: 0.300
-Best F1 Score: 0.7676
-Best Precision: 0.7982
+Best F1 Score: 0.7660
+Best Precision: 0.7947
 Best Recall: 0.7392
 
 Confusion Matrix:
 TP: 360
-FP: 91
+FP: 93
 FN: 127
 TN: N/A (not applicable for object detection)

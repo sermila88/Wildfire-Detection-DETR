@@ -308,12 +308,13 @@ def save_results(best_results, best_conf, all_results, output_dir, model_name, p
             f"Recall: {best_results['recall']:.2f}",
             fontsize=9, ha='left', va='center', color='red', weight='bold')
     
-    plt.title(f"{model_name}: F1 Score, Precision, and Recall vs. Confidence Threshold")
+    #plt.title(f"{model_name}: F1 Score, Precision, and Recall vs. Confidence Threshold")
     plt.xlabel("Confidence Threshold")
     plt.ylabel("Metric Value")
     plt.legend()
     plt.grid(True)
-    plt.savefig(os.path.join(plots_dir, "metrics.png"))
+    plt.tight_layout()
+    plt.savefig(os.path.join(plots_dir, "metrics.png"), bbox_inches='tight', dpi=150)
     plt.close()
     
     # Save JSON summary
@@ -365,7 +366,6 @@ def create_object_confusion_matrix(best_results, model_name, plots_dir):
         print("Warning: No counts available for confusion matrix")
         return None
     
-    # Create numeric matrix for heatmap
     cm_numeric = np.array([[best_results["tp"], best_results["fn"]],
                           [best_results["fp"], 0]])
     
@@ -373,12 +373,17 @@ def create_object_confusion_matrix(best_results, model_name, plots_dir):
     cm_labels = np.array([[str(int(best_results["tp"])), str(int(best_results["fn"]))],
                          [str(int(best_results["fp"])), "N/A"]])
     
-    plt.figure(figsize=(6, 5))
-    sns.heatmap(cm_numeric, annot=cm_labels, fmt="", cmap="Oranges",
+    plt.figure(figsize=(4, 4))
+    sns.heatmap(cm_numeric, annot=cm_labels, fmt="", 
+                cmap="YlOrRd",
+                cbar=False,
+                annot_kws={"fontsize": 12, "fontweight": "bold"},
                 xticklabels=["Pred Fire", "Pred No Fire"],
-                yticklabels=["GT Fire", "GT No Fire"])
-    plt.title(f"{model_name} – Object-Level Confusion Matrix (TN = N/A, IoU=0.1)")
-    out = os.path.join(plots_dir, "object_conf_matrix.png")
+                yticklabels=["GT Fire", "GT No Fire"],
+                linewidths=2, linecolor='white',
+                square=True)
+    #plt.title(f"{model_name} – Confusion Matrix (IoU=0.1)", fontsize=10)
+    out = os.path.join(plots_dir, "conf_matrix.png")
     plt.savefig(out, dpi=150, bbox_inches="tight")
     plt.close()
     return out
@@ -706,7 +711,7 @@ def find_best_conf_threshold_and_plot(
             verticalalignment="bottom",
         )
 
-        plt.title("F1 Score, Precision, and Recall vs. Confidence Threshold")
+        #plt.title("F1 Score, Precision, and Recall vs. Confidence Threshold")
         plt.xlabel("Confidence Threshold")
         plt.ylabel("Metric Value")
         plt.legend()
@@ -752,18 +757,18 @@ def create_comparison_visualizations(all_model_results, all_results_data, output
             # Only show conf on F1 bars
             if i == 0:
                 ax.text(bar.get_x() + bar.get_width()/2., height + 0.005,
-                       f'{height:.3f}\n(τ={conf:.2f})', 
+                       f'{height:.2f}\n(τ={conf:.2f})', 
                        ha='center', va='bottom', fontsize=9, fontweight='bold')
             else:
                 ax.text(bar.get_x() + bar.get_width()/2., height + 0.005,
-                       f'{height:.3f}', 
+                       f'{height:.2f}', 
                        ha='center', va='bottom', fontsize=9)
 
     ax.axhline(y=0.7, color='mediumpurple', linestyle='--', alpha=0.7, linewidth=0.8)
     
     ax.set_xlabel('Models', fontsize=12, fontweight='bold')
     ax.set_ylabel('Score', fontsize=12, fontweight='bold')
-    ax.set_title('Model Performance Comparison', fontsize=14, fontweight='bold')
+    #ax.set_title('Model Performance Comparison', fontsize=14, fontweight='bold')
     ax.set_xticks(x + width)
     ax.set_xticklabels(model_labels)
     ax.legend(loc='upper right', frameon=True, shadow=True)
@@ -809,13 +814,13 @@ def create_comparison_visualizations(all_model_results, all_results_data, output
         
         ax.set_xlabel('Confidence Threshold', fontsize=11)
         ax.set_ylabel(title, fontsize=11)
-        ax.set_title(f'{title} vs Confidence Threshold', fontsize=12, fontweight='bold')
+        # ax.set_title(f'{title} vs Confidence Threshold', fontsize=12, fontweight='bold')
         ax.legend(loc='best')
         ax.grid(True, alpha=0.3)
         ax.set_xlim([0.05, 0.9])
         ax.set_ylim([0, 1.02])
 
-    plt.suptitle('Threshold Analysis Comparison', fontsize=14, fontweight='bold')
+    # plt.suptitle('Threshold Analysis Comparison', fontsize=14, fontweight='bold')
     plt.tight_layout()
     plt.savefig(os.path.join(output_dir, "threshold_analysis_comparison.png"), dpi=300, bbox_inches='tight')
     plt.close()
@@ -844,7 +849,7 @@ def create_comparison_visualizations(all_model_results, all_results_data, output
 
     ax.set_xlabel('Models', fontsize=12, fontweight='bold')
     ax.set_ylabel('Number of Detections', fontsize=12, fontweight='bold')
-    ax.set_title('Detection Classification Breakdown', fontsize=14, fontweight='bold')
+    # ax.set_title('Detection Classification Breakdown', fontsize=14, fontweight='bold')
     ax.set_xticks(x)
     ax.set_xticklabels(model_labels)
     ax.legend(loc='upper right')
