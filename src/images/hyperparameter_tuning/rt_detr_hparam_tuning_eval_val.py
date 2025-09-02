@@ -268,6 +268,16 @@ def main():
     for trial_dir in trial_dirs:
         try:
             trial_num = int(os.path.basename(trial_dir).split('_')[1])
+
+            # Check if trial already evaluated
+            trial_output_file = os.path.join(OUTPUT_DIR, "trial_results", f"trial_{trial_num:03d}", "results.json")
+            if os.path.exists(trial_output_file):
+                print(f"  ✓ Trial {trial_num:03d} already evaluated, loading cached results...")
+                with open(trial_output_file, 'r') as f:
+                    result = json.load(f)
+                all_results.append(result)
+                continue
+                
             result = reevaluate_trial(trial_num, trial_dir, val_ds)
             
             if result:

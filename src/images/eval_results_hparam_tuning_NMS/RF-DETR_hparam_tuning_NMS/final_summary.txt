@@ -2,9 +2,9 @@ RF-DETR HYPERPARAMETER TUNING FINAL RESULTS (WITH NMS)
 ============================================================
 
 BEST CONFIGURATION: Trial 020
-  F1 Score: 0.8809
-  Precision: 0.8862
-  Recall: 0.8756
+  F1 Score: 0.8795
+  Precision: 0.8859
+  Recall: 0.8732
   Optimal Threshold: 0.25
 
 HYPERPARAMETERS:
@@ -21,8 +21,8 @@ HYPERPARAMETERS:
 Checkpoint: /vol/bitbucket/si324/rf-detr-wildfire/src/images/outputs/RF-DETR_hyperparameter_tuning/trial_020/checkpoints/checkpoint_best_ema.pth
 
 TOP 5 TRIALS:
-1. Trial 020: F1=0.8809, τ=0.25
+1. Trial 020: F1=0.8795, τ=0.25
 2. Trial 017: F1=0.8725, τ=0.25
-3. Trial 021: F1=0.8678, τ=0.25
+3. Trial 021: F1=0.8664, τ=0.25
 4. Trial 004: F1=0.8653, τ=0.30
 5. Trial 024: F1=0.8652, τ=0.30

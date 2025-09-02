@@ -1,0 +1,26 @@
+{
+  "best_trial": 9,
+  "best_f1": 0.8557692307692308,
+  "best_params": {
+    "epochs": 72,
+    "batch_size": 32,
+    "lr0": 0.0004987266757031058,
+    "imgsz": 640,
+    "optimizer": "SGD",
+    "weight_decay": 9.156190431089365e-05,
+    "patience": 40,
+    "cls": 2.730826763649284,
+    "bbox": 2.1975702194331035,
+    "giou": 2.3895246562352743,
+    "focal_alpha": 0.24261887019570794,
+    "focal_gamma": 1.764735209616289,
+    "cos_lr": true,
+    "warmup_epochs": 1,
+    "mixup": 0.002451183558703371,
+    "mosaic": 0.8623699743388792,
+    "dropout": 0.14586902022028117
+  },
+  "best_confidence": 0.4,
+  "total_trials": 17,
+  "timestamp": "2025-08-31T21:07:37.752445"
+}

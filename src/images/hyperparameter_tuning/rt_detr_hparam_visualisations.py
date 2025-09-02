@@ -1,5 +1,5 @@
 """
-RF-DETR Hyperparameter Tuning Visualizations
+RT-DETR Hyperparameter Tuning Visualizations
 """
 
 import os
@@ -10,8 +10,8 @@ import matplotlib
 matplotlib.use('Agg')
 
 # Configuration 
-RESULTS_FILE = "/vol/bitbucket/si324/rf-detr-wildfire/src/images/eval_results_hparam_tuning_NMS/RF-DETR_hparam_tuning_NMS/all_trials_results.json"
-OUTPUT_DIR = "/vol/bitbucket/si324/rf-detr-wildfire/src/images/eval_results_hparam_tuning_NMS/RF-DETR_hparam_tuning_NMS"
+RESULTS_FILE = "/vol/bitbucket/si324/rf-detr-wildfire/src/images/eval_results_hparam_tuning_NMS/RT-DETR_hparam_tuning_NMS/all_trials_results.json"
+OUTPUT_DIR = "/vol/bitbucket/si324/rf-detr-wildfire/src/images/eval_results_hparam_tuning_NMS/RT-DETR_hparam_tuning_NMS"
 
 def create_visualizations(results_file, output_dir):
     """Hyperparameter visualizations"""
@@ -67,16 +67,17 @@ def create_visualizations(results_file, output_dir):
     
     top_5 = sorted(trials, key=lambda x: x['best_result']['f1_score'], reverse=True)[:5]
     
+    # CHANGED: Use RT-DETR hyperparameter names
     table_data = [[f"{t['trial_number']}", 
                    f"{t['best_result']['f1_score']:.3f}",
-                   f"{t['hyperparameters']['resolution']}",
+                   f"{t['hyperparameters']['imgsz']}",  # Changed from 'resolution'
                    f"{t['hyperparameters']['batch_size']}",
-                   f"{t['hyperparameters']['lr']:.2e}"] 
+                   f"{t['hyperparameters']['lr0']:.2e}"]  # Changed from 'lr'
                   for t in top_5]
     
     # Position table to be centered vertically in the subplot
     table = ax2.table(cellText=table_data,
-                 colLabels=['Trial', 'F1 Score', 'Resolution', 'Batch Size', 'Learning Rate'],
+                 colLabels=['Trial', 'F1 Score', 'Image Size', 'Batch Size', 'Learning Rate'],  # Changed label
                  cellLoc='center',
                  loc='center',
                  colWidths=[0.12, 0.18, 0.18, 0.18, 0.28],
@@ -97,9 +98,6 @@ def create_visualizations(results_file, output_dir):
             for j in range(5):
                 table[(1, j)].set_facecolor('paleturquoise')
                 table[(1, j)].set_text_props(weight='bold')
-    
-    # Plot title
-    #fig.suptitle('RF-DETR Hyperparameter Tuning Results', fontsize=15, fontweight='bold', y=0.98)
     
     plt.tight_layout()
     plt.subplots_adjust(top=0.90) 

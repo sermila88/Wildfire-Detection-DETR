@@ -1,0 +1,12 @@
+Model: RF-DETR_hparam_tuning_NMS
+==================================================
+Best Confidence Threshold: 0.250
+Best F1 Score: 0.7448
+Best Precision: 0.7981
+Best Recall: 0.6982
+
+Confusion Matrix:
+TP: 340
+FP: 86
+FN: 147
+TN: N/A (not applicable for object detection)

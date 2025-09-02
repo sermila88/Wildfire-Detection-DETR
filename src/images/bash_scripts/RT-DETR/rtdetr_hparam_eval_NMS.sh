@@ -19,4 +19,4 @@ cd /vol/bitbucket/${USER}/rf-detr-wildfire
 mkdir -p /vol/bitbucket/${USER}/rf-detr-wildfire/src/images/eval_results_hparam_tuning_NMS/logs
 
 # Run the hyperparameter re-evaluation with NMS
-python src/images/hyperparameter_tuning/rf_detr_hparam_tuning_eval_val.py
+python src/images/hyperparameter_tuning/rt_detr_hparam_tuning_eval_val.py

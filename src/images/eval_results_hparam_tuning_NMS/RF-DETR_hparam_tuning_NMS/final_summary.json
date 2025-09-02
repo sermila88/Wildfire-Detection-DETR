@@ -1,6 +1,6 @@
 {
   "best_trial": 20,
-  "best_f1": 0.8808664259927799,
+  "best_f1": 0.8795180722891566,
   "best_params": {
     "resolution": 896,
     "batch_size": 4,
@@ -14,5 +14,5 @@
   },
   "best_confidence": 0.25,
   "total_trials": 24,
-  "timestamp": "2025-08-31T16:48:59.334267"
+  "timestamp": "2025-08-31T20:35:00.290406"
 }
