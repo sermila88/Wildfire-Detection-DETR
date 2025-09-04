@@ -7,9 +7,9 @@ YOLO_baseline:
   Recall: 0.6735
 
 RF-DETR_initial_training_NMS:
-  Best F1: 0.7979 @ conf=0.200
-  Precision: 0.8012
-  Recall: 0.7947
+  Best F1: 0.8026 @ conf=0.250
+  Precision: 0.8404
+  Recall: 0.7680
 
 RT-DETR_initial_training_NMS:
   Best F1: 0.7676 @ conf=0.300

@@ -1,0 +1,54 @@
+{
+  "timestamp": "20250902_165100",
+  "device": "CPU",
+  "num_threads": 8,
+  "system_info": {
+    "cpu": "x86_64",
+    "physical_cores": 8,
+    "logical_threads": 16
+  },
+  "results": {
+    "YOLO_baseline": {
+      "mean_latency_ms": 369.32978971966423,
+      "std_latency_ms": 36.276482864068335,
+      "min_latency_ms": 326.86272598220967,
+      "max_latency_ms": 466.3298679806758,
+      "median_latency_ms": 361.44131849869154,
+      "p95_latency_ms": 428.72897049528547,
+      "p99_latency_ms": 448.47792434011353,
+      "throughput_fps": 2.707607205904076,
+      "total_time_seconds": 197.96076728974003,
+      "peak_memory_mb": 64.78515625,
+      "avg_memory_mb": 35.576150011660445,
+      "num_images_tested": 536
+    },
+    "RF-DETR": {
+      "mean_latency_ms": 293.3545585020416,
+      "std_latency_ms": 8.735429810184982,
+      "min_latency_ms": 282.72316697984934,
+      "max_latency_ms": 353.40783299761824,
+      "median_latency_ms": 290.5809880030574,
+      "p95_latency_ms": 310.9703767404426,
+      "p99_latency_ms": 321.3912802064442,
+      "throughput_fps": 3.4088442501330367,
+      "total_time_seconds": 157.23804335709428,
+      "peak_memory_mb": 0.0,
+      "avg_memory_mb": 0.0,
+      "num_images_tested": 536
+    },
+    "RT-DETR": {
+      "mean_latency_ms": 710.972866476205,
+      "std_latency_ms": 97.67871531049418,
+      "min_latency_ms": 682.4424250226002,
+      "max_latency_ms": 2794.871702004457,
+      "median_latency_ms": 697.3705734999385,
+      "p95_latency_ms": 732.1171804942423,
+      "p99_latency_ms": 881.1119483521904,
+      "throughput_fps": 1.4065234373237059,
+      "total_time_seconds": 381.0814564312459,
+      "peak_memory_mb": 9.4921875,
+      "avg_memory_mb": -5.334829757462686,
+      "num_images_tested": 536
+    }
+  }
+}

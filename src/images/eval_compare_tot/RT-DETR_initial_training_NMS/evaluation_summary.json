@@ -1,6 +1,6 @@
 {
   "model_name": "RT-DETR_initial_training_NMS",
-  "timestamp": "2025-09-02 17:00:17",
+  "timestamp": "2025-09-04 08:31:26",
   "best_confidence_threshold": 0.30000000000000004,
   "best_results": {
     "f1_score": 0.7675906183368869,
