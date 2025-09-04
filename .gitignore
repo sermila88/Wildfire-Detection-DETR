@@ -25,6 +25,15 @@ RT-DETR_preds_yolo_format
 predicted_bounding_boxes_YOLO
 YOLO_predictions
 trial_results/
+image_level_bounding_boxes_RT-DETR
+object_level_bounding_boxes_RT-DETR
+image_level_bounding_boxes_RF-DETR
+object_level_bounding_boxes_RF-DETR
+image_level_bounding_boxes_YOLO
+object_level_bounding_boxes_YOLO
+
+
+
 
 
 # SLURM job outputs

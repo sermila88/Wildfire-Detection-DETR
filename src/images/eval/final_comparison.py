@@ -19,6 +19,7 @@ OUTPUT_BASE_DIR = "/vol/bitbucket/si324/rf-detr-wildfire/src/images/final_compar
 TEST_IMAGES_DIR = "/vol/bitbucket/si324/rf-detr-wildfire/src/images/data/pyro25img/images/test"
 GT_FOLDER = "/vol/bitbucket/si324/rf-detr-wildfire/src/images/data/pyro25img/labels/test"
 
+IOU_THRESHOLD = 0.01 # Lower IoU threshold than the baseline 0.1
 
 def generate_yolo_predictions(model_path, output_dir):
     """Generate YOLO predictions ONCE at conf=0.01 same as baseline"""
@@ -180,7 +181,7 @@ def evaluate_predictions(pred_folder, gt_folder, conf_th=0.1, cat=None):
                     best_match_idx = np.argmax(iou_values)
 
                     # Check for valid and unique match
-                    if max_iou > 0.1 and not gt_matches[best_match_idx]:
+                    if max_iou > IOU_THRESHOLD and not gt_matches[best_match_idx]:
                         nb_tp += 1
                         gt_matches[best_match_idx] = True
                     else:
@@ -206,6 +207,72 @@ def evaluate_predictions(pred_folder, gt_folder, conf_th=0.1, cat=None):
         "tp": nb_tp,
         "fp": nb_fp, 
         "fn": nb_fn
+    }
+
+def evaluate_predictions_image_level(pred_folder, gt_folder, conf_th=0.1, cat=None):
+    """Image-level evaluation - checking if the model detects smoke with spatial overlap"""
+    img_tp, img_fp, img_fn, img_tn = 0, 0, 0, 0
+
+    gt_filenames = [
+        os.path.splitext(os.path.basename(f))[0]
+        for f in glob.glob(os.path.join(gt_folder, "*.txt"))
+    ]
+    pred_filenames = [
+        os.path.splitext(os.path.basename(f))[0]
+        for f in glob.glob(os.path.join(pred_folder, "*.txt"))
+    ]
+
+    all_filenames = set(gt_filenames + pred_filenames)
+    
+    for filename in all_filenames:
+        gt_file = os.path.join(gt_folder, f"{filename}.txt")
+        pred_file = os.path.join(pred_folder, f"{filename}.txt")
+
+        # Check if GT has smoke
+        has_smoke_gt = os.path.isfile(gt_file) and os.path.getsize(gt_file) > 0
+        
+        # Check if predictions have smoke above threshold
+        has_smoke_pred = False
+        if os.path.isfile(pred_file) and os.path.getsize(pred_file) > 0:
+            with open(pred_file, "r") as f:
+                for line in f.readlines():
+                    parts = line.strip().split()
+                    if len(parts) >= 6:
+                        conf = float(parts[5])
+                        if conf >= conf_th:
+                            has_smoke_pred = True
+                            break
+
+        # Image-level classification
+        if has_smoke_gt:
+            if has_smoke_pred:
+                img_tp += 1
+            else:
+                img_fn += 1
+        else:
+            if has_smoke_pred:
+                img_fp += 1
+            else:
+                img_tn += 1
+
+    precision = img_tp / (img_tp + img_fp) if (img_tp + img_fp) > 0 else 0
+    recall = img_tp / (img_tp + img_fn) if (img_tp + img_fn) > 0 else 0
+    f1_score = (
+        2 * (precision * recall) / (precision + recall)
+        if (precision + recall) > 0
+        else 0
+    )
+    accuracy = (img_tp + img_tn) / (img_tp + img_fp + img_fn + img_tn) if (img_tp + img_fp + img_fn + img_tn) > 0 else 0
+
+    return {
+        "precision": precision, 
+        "recall": recall, 
+        "f1_score": f1_score,
+        "accuracy": accuracy,
+        "tp": img_tp,
+        "fp": img_fp, 
+        "fn": img_fn,
+        "tn": img_tn
     }
 
 def save_predictions_by_threshold(pred_dir, output_base_dir, conf_threshold):
@@ -241,6 +308,7 @@ def evaluate_model(model_name, model_type, model_path, conf_thres_range):
     print(f"\n{'='*60}")
     print(f"Evaluating {model_name}")
     print(f"{'='*60}")
+    print(f"[{model_name}] type={model_type} checkpoint={model_path}")
     
     # Setup directories
     model_output_dir = os.path.join(OUTPUT_BASE_DIR, model_name)
@@ -295,91 +363,156 @@ def evaluate_model(model_name, model_type, model_path, conf_thres_range):
         for pred_file in tqdm(pred_files, desc="Applying NMS"):
             apply_nms_to_predictions(pred_file, iou_threshold=0.01)
 
-    # Evaluate at different thresholds 
-    all_results = []
-    best_results = None
-    best_conf = 0
+    # Evaluate at different thresholds - BOTH OBJECT AND IMAGE LEVEL
+    obj_results = []
+    img_results = []
+    best_obj_results = None
+    best_img_results = None
+    best_obj_conf = 0
+    best_img_conf = 0
     
     for conf_threshold in tqdm(conf_thres_range, desc="Evaluating thresholds"):
-        results = evaluate_predictions(pred_dir, GT_FOLDER, conf_threshold)
-        results['confidence_threshold'] = conf_threshold
-        all_results.append(results)
+        # Object-level evaluation
+        obj_res = evaluate_predictions(pred_dir, GT_FOLDER, conf_threshold)
+        obj_res['confidence_threshold'] = conf_threshold
+        obj_results.append(obj_res)
+        
+        # Image-level evaluation
+        img_res = evaluate_predictions_image_level(pred_dir, GT_FOLDER, conf_threshold)
+        img_res['confidence_threshold'] = conf_threshold
+        img_results.append(img_res)
 
         # Save filtered predictions at this threshold
         save_predictions_by_threshold(pred_dir, pred_base_dir, conf_threshold)
         
-        if results['f1_score'] > (best_results['f1_score'] if best_results else 0):
-            best_results = results
-            best_conf = conf_threshold
+        # Track best results
+        if obj_res['f1_score'] > (best_obj_results['f1_score'] if best_obj_results else 0):
+            best_obj_results = obj_res
+            best_obj_conf = conf_threshold
+            
+        if img_res['f1_score'] > (best_img_results['f1_score'] if best_img_results else 0):
+            best_img_results = img_res
+            best_img_conf = conf_threshold
     
-    # Save results
-    save_results(best_results, best_conf, all_results, model_output_dir, model_name, plots_dir)
+    # Save results for both levels
+    save_results_both_levels(best_obj_results, best_obj_conf, obj_results, 
+                           best_img_results, best_img_conf, img_results,
+                           model_output_dir, model_name, plots_dir)
 
-    # Create confusion matrix 
-    if 'tp' in best_results:
-        cm_path = create_object_confusion_matrix(best_results, model_name, plots_dir)
-        print(f"Confusion matrix saved: {cm_path}")
+    # Create confusion matrices for both levels
+    if 'tp' in best_obj_results:
+        obj_cm_path = create_object_confusion_matrix(best_obj_results, model_name, plots_dir)
+        print(f"Object confusion matrix saved: {obj_cm_path}")
+    
+    if 'tp' in best_img_results:
+        img_cm_path = create_image_confusion_matrix(best_img_results, model_name, plots_dir)
+        print(f"Image confusion matrix saved: {img_cm_path}")
 
-    # Generate bounding box visualizations at best threshold
-    generate_bounding_boxes(model_name, model_type, pred_dir, best_conf)
+    # Generate bounding box visualizations at best threshold for both levels
+    generate_bounding_boxes_both_levels(model_name, model_type, pred_dir, best_obj_conf, best_img_conf)
 
     # Create visualization summary
-    create_visualization_summary(model_name, model_type, pred_dir, best_conf)
+    create_visualization_summary_both_levels(model_name, model_type, pred_dir, best_obj_conf, best_img_conf)
     
-    return best_results, best_conf
+    return best_obj_results, best_obj_conf, best_img_results, best_img_conf
 
-def save_results(best_results, best_conf, all_results, output_dir, model_name, plots_dir):
-    """Save evaluation results with plots and summaries"""
+def save_results_both_levels(best_obj_results, best_obj_conf, obj_results, 
+                            best_img_results, best_img_conf, img_results,
+                            output_dir, model_name, plots_dir):
+    """Save evaluation results for both object and image levels"""
     
-    # Generate plot
-    conf_thresholds = [r['confidence_threshold'] for r in all_results]
-    f1_scores = [r['f1_score'] for r in all_results]
-    precisions = [r['precision'] for r in all_results]
-    recalls = [r['recall'] for r in all_results]
+    # Generate object-level plot
+    conf_thresholds = [r['confidence_threshold'] for r in obj_results]
+    obj_f1_scores = [r['f1_score'] for r in obj_results]
+    obj_precisions = [r['precision'] for r in obj_results]
+    obj_recalls = [r['recall'] for r in obj_results]
     
     plt.figure(figsize=(10, 6))
-    plt.plot(conf_thresholds, f1_scores, label="F1 Score", color="blue", marker="o")
-    plt.plot(conf_thresholds, precisions, label="Precision", color="green", linestyle="--")
-    plt.plot(conf_thresholds, recalls, label="Recall", color="red", linestyle="-.")
+    plt.plot(conf_thresholds, obj_f1_scores, label="F1 Score", color="blue", marker="o")
+    plt.plot(conf_thresholds, obj_precisions, label="Precision", color="green", linestyle="--")
+    plt.plot(conf_thresholds, obj_recalls, label="Recall", color="red", linestyle="-.")
     
-    plt.scatter(best_conf, best_results['f1_score'], color="blue", s=150, marker = '*', edgecolor="black", zorder=6)
-    plt.scatter(best_conf, best_results['precision'], color="green", s=100, edgecolor="k", zorder=5)
-    plt.scatter(best_conf, best_results['recall'], color="red", s=100, edgecolor="k", zorder=5)
+    plt.scatter(best_obj_conf, best_obj_results['f1_score'], color="blue", s=150, marker = '*', edgecolor="black", zorder=6)
+    plt.scatter(best_obj_conf, best_obj_results['precision'], color="green", s=100, edgecolor="k", zorder=5)
+    plt.scatter(best_obj_conf, best_obj_results['recall'], color="red", s=100, edgecolor="k", zorder=5)
     
-    plt.text(best_conf + 0.02, best_results['f1_score'] + 0.02,
-        f"Best F1: {best_results['f1_score']:.2f}",
-        fontsize=9, ha='left', va='center', color='blue', weight='bold')
+    plt.text(best_obj_conf + 0.02, best_obj_results['f1_score'] + 0.02,
+        f"Best F1: {best_obj_results['f1_score']:.2f}",
+        fontsize=11, ha='left', va='center', color='blue', weight='bold')
 
-    plt.text(best_conf + 0.02, best_results['precision'] + 0.06,
-            f"Precision: {best_results['precision']:.2f}",
-            fontsize=9, ha='left', va='center', color='green', weight='bold')
+    plt.text(best_obj_conf + 0.02, best_obj_results['precision'] + 0.06,
+            f"Precision: {best_obj_results['precision']:.2f}",
+            fontsize=11, ha='left', va='center', color='green', weight='bold')
 
-    plt.text(best_conf + 0.02, best_results['recall'] - 0.06,
-            f"Recall: {best_results['recall']:.2f}",
-            fontsize=9, ha='left', va='center', color='red', weight='bold')
+    plt.text(best_obj_conf + 0.02, best_obj_results['recall'] - 0.06,
+            f"Recall: {best_obj_results['recall']:.2f}",
+            fontsize=11, ha='left', va='center', color='red', weight='bold')
     
-    #plt.title(f"{model_name}: F1 Score, Precision, and Recall vs. Confidence Threshold")
     plt.xlabel("Confidence Threshold")
     plt.ylabel("Metric Value")
     plt.legend()
     plt.grid(True)
-    plt.savefig(os.path.join(plots_dir, "metrics.png"), bbox_inches='tight', dpi=150)
+    plt.tight_layout()
+    plt.savefig(os.path.join(plots_dir, "object_level_metrics.png"), bbox_inches='tight', dpi=150)
     plt.close()
     
-    # Save JSON summary
+    # Generate image-level plot
+    img_f1_scores = [r['f1_score'] for r in img_results]
+    img_precisions = [r['precision'] for r in img_results]
+    img_recalls = [r['recall'] for r in img_results]
+    img_accuracies = [r['accuracy'] for r in img_results]
+    
+    plt.figure(figsize=(10, 6))
+    plt.plot(conf_thresholds, img_f1_scores, label="F1 Score", color="blue", marker="o")
+    plt.plot(conf_thresholds, img_precisions, label="Precision", color="green", linestyle="--")
+    plt.plot(conf_thresholds, img_recalls, label="Recall", color="red", linestyle="-.")
+    plt.plot(conf_thresholds, img_accuracies, label="Accuracy", color="purple", linestyle=":")
+    
+    plt.scatter(best_img_conf, best_img_results['f1_score'], color="blue", s=150, marker = '*', edgecolor="black", zorder=6)
+    plt.scatter(best_img_conf, best_img_results['precision'], color="green", s=100, edgecolor="k", zorder=5)
+    plt.scatter(best_img_conf, best_img_results['recall'], color="red", s=100, edgecolor="k", zorder=5)
+    plt.scatter(best_img_conf, best_img_results['accuracy'], color="purple", s=100, edgecolor="k", zorder=5)
+    
+    plt.text(best_img_conf + 0.02, best_img_results['f1_score'] + 0.02,
+        f"Best F1: {best_img_results['f1_score']:.2f}",
+        fontsize=11, ha='left', va='center', color='blue', weight='bold')
+
+    plt.text(best_img_conf + 0.02, best_img_results['precision'] + 0.06,
+            f"Precision: {best_img_results['precision']:.2f}",
+            fontsize=11, ha='left', va='center', color='green', weight='bold')
+
+    plt.text(best_img_conf + 0.02, best_img_results['recall'] - 0.06,
+            f"Recall: {best_img_results['recall']:.2f}",
+            fontsize=11, ha='left', va='center', color='red', weight='bold')
+    
+    plt.text(best_img_conf + 0.02, best_img_results['accuracy'] - 0.10,
+            f"Accuracy: {best_img_results['accuracy']:.2f}",
+            fontsize=11, ha='left', va='center', color='purple', weight='bold')
+    
+    plt.xlabel("Confidence Threshold")
+    plt.ylabel("Metric Value")
+    plt.legend()
+    plt.grid(True)
+    plt.tight_layout()
+    plt.savefig(os.path.join(plots_dir, "image_level_metrics.png"), bbox_inches='tight', dpi=150)
+    plt.close()
+    
+    # Save JSON summary with both levels
     summary = {
         "model_name": model_name,
         "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-        "best_confidence_threshold": float(best_conf),
-        "best_results": {
-            "f1_score": float(best_results['f1_score']),
-            "precision": float(best_results['precision']),
-            "recall": float(best_results['recall']),
-            "tp": int(best_results['tp']) if 'tp' in best_results else None,
-            "fp": int(best_results['fp']) if 'fp' in best_results else None,
-            "fn": int(best_results['fn']) if 'fn' in best_results else None
-        },
-        "all_results": [{
+        "iou_threshold": IOU_THRESHOLD,
+        "object_level": {
+            "best_confidence_threshold": float(best_obj_conf),
+            "best_results": {
+                "f1_score": float(best_obj_results['f1_score']),
+                "precision": float(best_obj_results['precision']),
+                "recall": float(best_obj_results['recall']),
+                "tp": int(best_obj_results['tp']) if 'tp' in best_obj_results else None,
+                "fp": int(best_obj_results['fp']) if 'fp' in best_obj_results else None,
+                "fn": int(best_obj_results['fn']) if 'fn' in best_obj_results else None
+            },
+            "all_results": [{
             "confidence_threshold": float(r['confidence_threshold']),
             "f1_score": float(r['f1_score']),
             "precision": float(r['precision']),
@@ -387,7 +520,32 @@ def save_results(best_results, best_conf, all_results, output_dir, model_name, p
             "tp": int(r['tp']) if 'tp' in r else None,
             "fp": int(r['fp']) if 'fp' in r else None,
             "fn": int(r['fn']) if 'fn' in r else None
-        } for r in all_results]
+        } for r in obj_results]
+        },
+        "image_level": {
+            "best_confidence_threshold": float(best_img_conf),
+            "best_results": {
+                "f1_score": float(best_img_results['f1_score']),
+                "precision": float(best_img_results['precision']),
+                "recall": float(best_img_results['recall']),
+                "accuracy": float(best_img_results['accuracy']),
+                "tp": int(best_img_results['tp']) if 'tp' in best_img_results else None,
+                "fp": int(best_img_results['fp']) if 'fp' in best_img_results else None,
+                "fn": int(best_img_results['fn']) if 'fn' in best_img_results else None,
+                "tn": int(best_img_results['tn']) if 'tn' in best_img_results else None
+            },
+            "all_results": [{
+            "confidence_threshold": float(r['confidence_threshold']),
+            "f1_score": float(r['f1_score']),
+            "precision": float(r['precision']),
+            "recall": float(r['recall']),
+            "accuracy": float(r['accuracy']),
+            "tp": int(r['tp']) if 'tp' in r else None,
+            "fp": int(r['fp']) if 'fp' in r else None,
+            "fn": int(r['fn']) if 'fn' in r else None,
+            "tn": int(r['tn']) if 'tn' in r else None
+        } for r in img_results]
+        }
     }
     
     with open(os.path.join(output_dir, "evaluation_summary.json"), 'w') as f:
@@ -397,16 +555,26 @@ def save_results(best_results, best_conf, all_results, output_dir, model_name, p
     with open(os.path.join(output_dir, "evaluation_summary.txt"), 'w') as f:
         f.write(f"Model: {model_name}\n")
         f.write(f"{'='*50}\n")
-        f.write(f"Best Confidence Threshold: {best_conf:.3f}\n")
-        f.write(f"Best F1 Score: {best_results['f1_score']:.4f}\n")
-        f.write(f"Best Precision: {best_results['precision']:.4f}\n")
-        f.write(f"Best Recall: {best_results['recall']:.4f}\n")
-        if 'tp' in best_results:
-            f.write(f"\nConfusion Matrix:\n")
-            f.write(f"TP: {int(best_results['tp'])}\n")
-            f.write(f"FP: {int(best_results['fp'])}\n")
-            f.write(f"FN: {int(best_results['fn'])}\n")
-            f.write(f"TN: N/A (not applicable for object detection)\n")
+        f.write(f"IoU Threshold: {IOU_THRESHOLD}\n\n")
+        
+        f.write("OBJECT-LEVEL RESULTS:\n")
+        f.write(f"Best Confidence Threshold: {best_obj_conf:.3f}\n")
+        f.write(f"Best F1 Score: {best_obj_results['f1_score']:.4f}\n")
+        f.write(f"Precision: {best_obj_results['precision']:.4f}\n")
+        f.write(f"Recall: {best_obj_results['recall']:.4f}\n")
+        if 'tp' in best_obj_results:
+            f.write(f"TP: {int(best_obj_results['tp'])}, FP: {int(best_obj_results['fp'])}, FN: {int(best_obj_results['fn'])}\n\n")
+        
+        f.write("IMAGE-LEVEL RESULTS:\n")
+        f.write(f"Best Confidence Threshold: {best_img_conf:.3f}\n")
+        f.write(f"Best F1 Score: {best_img_results['f1_score']:.4f}\n")
+        f.write(f"Precision: {best_img_results['precision']:.4f}\n")
+        f.write(f"Recall: {best_img_results['recall']:.4f}\n")
+        f.write(f"Accuracy: {best_img_results['accuracy']:.4f}\n")
+        if 'tp' in best_img_results:
+            f.write(f"TP: {int(best_img_results['tp'])}, FP: {int(best_img_results['fp'])}, ")
+            f.write(f"FN: {int(best_img_results['fn'])}, TN: {int(best_img_results['tn'])}\n")
+
 
 def create_object_confusion_matrix(best_results, model_name, plots_dir):
     """Create object-level confusion matrix visualization"""
@@ -433,7 +601,36 @@ def create_object_confusion_matrix(best_results, model_name, plots_dir):
                 square=True)
     #plt.title(f"{model_name} – Confusion Matrix (IoU=0.1)", fontsize=10)
     plt.tight_layout() 
-    out = os.path.join(plots_dir, "conf_matrix.png")
+    out = os.path.join(plots_dir, "object_level_conf_matrix.png")
+    plt.savefig(out, dpi=150, bbox_inches="tight")
+    plt.close()
+    return out
+
+def create_image_confusion_matrix(best_results, model_name, plots_dir):
+    """Create image-level confusion matrix visualization"""
+    # Check if we have the counts
+    if 'tp' not in best_results or 'fp' not in best_results or 'fn' not in best_results or 'tn' not in best_results:
+        print("Warning: No counts available for confusion matrix")
+        return None
+    
+    cm_numeric = np.array([[best_results["tp"], best_results["fn"]],
+                          [best_results["fp"], best_results["tn"]]])
+    
+    # Create annotation matrix
+    cm_labels = np.array([[str(int(best_results["tp"])), str(int(best_results["fn"]))],
+                         [str(int(best_results["fp"])), str(int(best_results["tn"]))]])
+    
+    plt.figure(figsize=(4, 4))
+    sns.heatmap(cm_numeric, annot=cm_labels, fmt="", 
+                cmap="Blues",  # Blue colormap for image-level
+                cbar=False,
+                annot_kws={"fontsize": 12, "fontweight": "bold"},
+                xticklabels=["Pred Fire", "Pred No Fire"],
+                yticklabels=["GT Fire", "GT No Fire"],
+                linewidths=2, linecolor='white',
+                square=True)
+    plt.tight_layout() 
+    out = os.path.join(plots_dir, "image_level_conf_matrix.png")
     plt.savefig(out, dpi=150, bbox_inches="tight")
     plt.close()
     return out
@@ -473,7 +670,7 @@ def classify_image_boxes(pred_file, gt_file, conf_threshold):
 
             pred['iou'] = max_iou  # Store the IoU value
             
-            if max_iou > 0.1 and not gt_matched[best_match_idx]:
+            if max_iou > IOU_THRESHOLD and not gt_matched[best_match_idx]:
                 pred['type'] = 'TP'
                 gt_matched[best_match_idx] = True
             else:
@@ -490,13 +687,20 @@ def classify_image_boxes(pred_file, gt_file, conf_threshold):
     # Return both the detailed box classifications and overall image classification
     return pred_data, gt_matched, (has_tp, has_fp, has_fn)
 
-def generate_bounding_boxes(model_name, model_type, pred_dir, best_conf):
-    """Generate bounding box visualizations at best threshold"""
-    print(f"Generating bounding boxes for {model_name} at conf={best_conf:.3f}")
+def generate_bounding_boxes_both_levels(model_name, model_type, pred_dir, best_obj_conf, best_img_conf):
+    """Generate bounding box visualizations for both object and image levels"""
+    print(f"Generating object-level bounding boxes at conf={best_obj_conf:.3f}")
+    print(f"Generating image-level bounding boxes at conf={best_img_conf:.3f}")
     
-    bbox_dir = os.path.join(OUTPUT_BASE_DIR, model_name, f"predicted_bounding_boxes_{model_type}")
+    # Object-level directories
+    obj_bbox_dir = os.path.join(OUTPUT_BASE_DIR, model_name, f"object_level_bounding_boxes_{model_type}")
     for cls in ['TP', 'FP', 'FN']: 
-        os.makedirs(os.path.join(bbox_dir, cls), exist_ok=True)
+        os.makedirs(os.path.join(obj_bbox_dir, cls), exist_ok=True)
+    
+    # Image-level directories
+    img_bbox_dir = os.path.join(OUTPUT_BASE_DIR, model_name, f"image_level_bounding_boxes_{model_type}")
+    for cls in ['TP', 'FP', 'FN', 'TN']: 
+        os.makedirs(os.path.join(img_bbox_dir, cls), exist_ok=True)
     
     test_images = glob.glob(os.path.join(TEST_IMAGES_DIR, "*.jpg"))
     test_images.extend(glob.glob(os.path.join(TEST_IMAGES_DIR, "*.png")))
@@ -506,76 +710,115 @@ def generate_bounding_boxes(model_name, model_type, pred_dir, best_conf):
         gt_file = os.path.join(GT_FOLDER, f"{img_name}.txt")
         pred_file = os.path.join(pred_dir, f"{img_name}.txt")
         
-        # Get detailed box classifications
-        box_classifications = classify_image_boxes(pred_file, gt_file, best_conf)
-        pred_data, gt_matched, (has_tp, has_fp, has_fn) = box_classifications
+        # Object-level classifications
+        obj_classifications = classify_image_boxes(pred_file, gt_file, best_obj_conf)
+        pred_data, gt_matched, (has_tp, has_fp, has_fn) = obj_classifications
         
-        # Skip if no detections or GT
-        if not has_tp and not has_fp and not has_fn:
-            continue
+        # Skip if no detections or GT for object level
+        if has_tp or has_fp or has_fn:
+            # Count each type
+            tp_boxes = [i for i, p in enumerate(pred_data) if p['type'] == 'TP']
+            fp_boxes = [i for i, p in enumerate(pred_data) if p['type'] == 'FP']
+            fn_indices = [i for i, matched in enumerate(gt_matched) if not matched]
+
+            # Save one image per detection for object-level
+            for idx, tp_idx in enumerate(tp_boxes, 1):
+                output_path = os.path.join(obj_bbox_dir, "TP", f"{img_name}_TP_{idx}.jpg")
+                draw_bounding_boxes(img_path, pred_file, gt_file, obj_classifications, 
+                                output_path, model_name, best_obj_conf, "TP", highlight_idx=tp_idx, thickness=6)
+
+            for idx, fp_idx in enumerate(fp_boxes, 1):
+                output_path = os.path.join(obj_bbox_dir, "FP", f"{img_name}_FP_{idx}.jpg")
+                draw_bounding_boxes(img_path, pred_file, gt_file, obj_classifications, 
+                                output_path, model_name, best_obj_conf, "FP", highlight_idx=fp_idx, thickness=6)
+
+            for idx, fn_idx in enumerate(fn_indices, 1):
+                output_path = os.path.join(obj_bbox_dir, "FN", f"{img_name}_FN_{idx}.jpg")
+                draw_bounding_boxes(img_path, pred_file, gt_file, obj_classifications, 
+                                output_path, model_name, best_obj_conf, "FN", highlight_idx=fn_idx, thickness=6)
         
-        # Count each type
-        tp_boxes = [i for i, p in enumerate(pred_data) if p['type'] == 'TP']
-        fp_boxes = [i for i, p in enumerate(pred_data) if p['type'] == 'FP']
-        fn_indices = [i for i, matched in enumerate(gt_matched) if not matched]
-
-        # Save one image per detection
-        for idx, tp_idx in enumerate(tp_boxes, 1):
-            output_path = os.path.join(bbox_dir, "TP", f"{img_name}_TP_{idx}.jpg")
-            draw_bounding_boxes(img_path, pred_file, gt_file, box_classifications, 
-                            output_path, model_name, best_conf, "TP", highlight_idx=tp_idx)
-
-        for idx, fp_idx in enumerate(fp_boxes, 1):
-            output_path = os.path.join(bbox_dir, "FP", f"{img_name}_FP_{idx}.jpg")
-            draw_bounding_boxes(img_path, pred_file, gt_file, box_classifications, 
-                            output_path, model_name, best_conf, "FP", highlight_idx=fp_idx)
-
-        for idx, fn_idx in enumerate(fn_indices, 1):
-            output_path = os.path.join(bbox_dir, "FN", f"{img_name}_FN_{idx}.jpg")
-            draw_bounding_boxes(img_path, pred_file, gt_file, box_classifications, 
-                            output_path, model_name, best_conf, "FN", highlight_idx=fn_idx)
+        # Image-level classification
+        has_smoke_gt = os.path.isfile(gt_file) and os.path.getsize(gt_file) > 0
+        has_smoke_pred = False
+        if os.path.isfile(pred_file) and os.path.getsize(pred_file) > 0:
+            with open(pred_file, "r") as f:
+                for line in f.readlines():
+                    parts = line.strip().split()
+                    if len(parts) >= 6:
+                        conf = float(parts[5])
+                        if conf >= best_img_conf:
+                            has_smoke_pred = True
+                            break
         
+        # Determine image-level class
+        if has_smoke_gt:
+            if has_smoke_pred:
+                img_class = "TP"
+            else:
+                img_class = "FN"
+        else:
+            if has_smoke_pred:
+                img_class = "FP"
+            else:
+                img_class = "TN"
+        
+        # Save image-level visualization
+        output_path = os.path.join(img_bbox_dir, img_class, f"{img_name}_{img_class}.jpg")
+        img_classifications = classify_image_boxes(pred_file, gt_file, best_img_conf)
+        draw_bounding_boxes(img_path, pred_file, gt_file, img_classifications,
+                          output_path, model_name, best_img_conf, img_class, highlight_idx=None, thickness=6)
 
-def create_visualization_summary(model_name, model_type, pred_dir, best_conf):
-    """Create a summary file for all bounding box folders"""
-    bbox_dir = os.path.join(OUTPUT_BASE_DIR, model_name, f"predicted_bounding_boxes_{model_type}")
+def create_visualization_summary_both_levels(model_name, model_type, pred_dir, best_obj_conf, best_img_conf):
+    """Create a summary file for both object and image level bounding box folders"""
+    # Object-level summary
+    obj_bbox_dir = os.path.join(OUTPUT_BASE_DIR, model_name, f"object_level_bounding_boxes_{model_type}")
+    obj_tp_folder = os.path.join(obj_bbox_dir, "TP")
+    obj_fp_folder = os.path.join(obj_bbox_dir, "FP")
+    obj_fn_folder = os.path.join(obj_bbox_dir, "FN")
     
-    # Simple count of images in each folder
-    tp_folder = os.path.join(bbox_dir, "TP")
-    fp_folder = os.path.join(bbox_dir, "FP")
-    fn_folder = os.path.join(bbox_dir, "FN")
-    
-    summary = {
+    obj_summary = {
         "model_name": model_name,
-        "best_confidence_threshold": float(best_conf),
+        "level": "object",
+        "best_confidence_threshold": float(best_obj_conf),
         "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         "image_counts": {
-            "TP": len(glob.glob(os.path.join(tp_folder, "*.jpg"))),
-            "FP": len(glob.glob(os.path.join(fp_folder, "*.jpg"))),
-            "FN": len(glob.glob(os.path.join(fn_folder, "*.jpg")))
+            "TP": len(glob.glob(os.path.join(obj_tp_folder, "*.jpg"))),
+            "FP": len(glob.glob(os.path.join(obj_fp_folder, "*.jpg"))),
+            "FN": len(glob.glob(os.path.join(obj_fn_folder, "*.jpg")))
         }
     }
-    # Save summary as JSON
-    summary_path = os.path.join(bbox_dir, "visualization_summary.json")
-    with open(summary_path, 'w') as f:
-        json.dump(summary, f, indent=2)
     
-    # Also save as text for easy reading
-    summary_txt_path = os.path.join(bbox_dir, "visualization_summary.txt")
-    with open(summary_txt_path, 'w') as f:
-        f.write(f"Visualization Summary for {model_name}\n")
-        f.write(f"{'='*60}\n")
-        f.write(f"Generated: {summary['timestamp']}\n")
-        f.write(f"Best confidence threshold: {best_conf:.3f}\n\n")
-        f.write(f"Images saved:\n")
-        f.write(f"  TP folder: {summary['image_counts']['TP']} images\n")
-        f.write(f"  FP folder: {summary['image_counts']['FP']} images\n")
-        f.write(f"  FN folder: {summary['image_counts']['FN']} images\n")
+    with open(os.path.join(obj_bbox_dir, "visualization_summary.json"), 'w') as f:
+        json.dump(obj_summary, f, indent=2)
     
-    print(f"Visualization summary saved: {summary_path}")
+    # Image-level summary
+    img_bbox_dir = os.path.join(OUTPUT_BASE_DIR, model_name, f"image_level_bounding_boxes_{model_type}")
+    img_tp_folder = os.path.join(img_bbox_dir, "TP")
+    img_fp_folder = os.path.join(img_bbox_dir, "FP")
+    img_fn_folder = os.path.join(img_bbox_dir, "FN")
+    img_tn_folder = os.path.join(img_bbox_dir, "TN")
+    
+    img_summary = {
+        "model_name": model_name,
+        "level": "image",
+        "best_confidence_threshold": float(best_img_conf),
+        "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "image_counts": {
+            "TP": len(glob.glob(os.path.join(img_tp_folder, "*.jpg"))),
+            "FP": len(glob.glob(os.path.join(img_fp_folder, "*.jpg"))),
+            "FN": len(glob.glob(os.path.join(img_fn_folder, "*.jpg"))),
+            "TN": len(glob.glob(os.path.join(img_tn_folder, "*.jpg")))
+        }
+    }
+    
+    with open(os.path.join(img_bbox_dir, "visualization_summary.json"), 'w') as f:
+        json.dump(img_summary, f, indent=2)
+    
+    print(f"Object-level visualization summary saved: {obj_bbox_dir}/visualization_summary.json")
+    print(f"Image-level visualization summary saved: {img_bbox_dir}/visualization_summary.json")
 
 def draw_bounding_boxes(image_path, pred_file, gt_file, box_classifications, 
-                        output_path, model_name, conf_threshold, folder_type, highlight_idx=None):
+                        output_path, model_name, conf_threshold, folder_type, highlight_idx=None, thickness=4):
     """Draw bounding boxes with colors based on the TP/FP classification"""
     image = cv2.imread(image_path)
     if image is None:
@@ -623,14 +866,14 @@ def draw_bounding_boxes(image_path, pred_file, gt_file, box_classifications,
                         # Color based on actual classification
                         if pred_idx < len(pred_data):
                             # Highlight the prediction box that the image is focused on
-                            thickness = 4 if (pred_idx == highlight_idx and folder_type in ['TP', 'FP']) else 2
+                            box_thickness = thickness if (pred_idx == highlight_idx and folder_type in ['TP', 'FP']) else 2
                             box_type = pred_data[pred_idx]['type']
                             if box_type == 'TP':
                                 color = (0, 255, 0)  # Green
                             else:  # FP
                                 color = (0, 0, 255)  # Red
                             
-                            cv2.rectangle(image, (x1, y1), (x2, y2), color, thickness)
+                            cv2.rectangle(image, (x1, y1), (x2, y2), color, box_thickness)
                             iou_val = pred_data[pred_idx]['iou'] if 'iou' in pred_data[pred_idx] else 0.0
                             label = f"{box_type}: IoU={float(iou_val):.2f}"
                             label_offset = 25 + (pred_idx * 30)
@@ -777,7 +1020,7 @@ def find_best_conf_threshold_and_plot(
 
 
 def create_comparison_visualizations(all_model_results, all_results_data, output_dir):
-    """Create comparison plots for all models"""
+    """Create comparison plots for all models - both object and image level"""
     
     model_order = ['YOLO_baseline', 'RT-DETR_initial_training_NMS', 'RF-DETR_initial_training_NMS']
     model_labels = ['YOLOv8', 'RT-DETR', 'RF-DETR']
@@ -789,7 +1032,7 @@ def create_comparison_visualizations(all_model_results, all_results_data, output
         'recall': '#F44336'    # Red for Recall
     }
 
-    # 1. GROUPED BAR CHART - F1, Precision, Recall
+    # 1. OBJECT-LEVEL GROUPED BAR CHART
     fig, ax = plt.subplots(figsize=(12, 7))
     metrics = ['F1 Score', 'Precision', 'Recall']
     metric_keys = ['best_f1', 'precision', 'recall']
@@ -798,38 +1041,71 @@ def create_comparison_visualizations(all_model_results, all_results_data, output
     width = 0.25
 
     for i, metric in enumerate(metric_keys):
-        values = [all_model_results[m][metric] for m in model_order]
+        values = [all_model_results[m]['object_level'][metric] for m in model_order]
         positions = x + i * width
         color = bar_colors[color_keys[i]]
         bars = ax.bar(positions, values, width, label=metrics[i], color=color)
         for j, bar in enumerate(bars):
-            conf = all_model_results[model_order[j]]['best_conf']
+            conf = all_model_results[model_order[j]]['object_level']['best_conf']
             height = bar.get_height()
             # Only show conf on F1 bars
             if i == 0:
                 ax.text(bar.get_x() + bar.get_width()/2., height + 0.005,
                        f'{height:.2f}\n(τ={conf:.2f})', 
-                       ha='center', va='bottom', fontsize=9, fontweight='bold')
+                       ha='center', va='bottom', fontsize=11, fontweight='bold')
             else:
                 ax.text(bar.get_x() + bar.get_width()/2., height + 0.005,
                        f'{height:.2f}', 
-                       ha='center', va='bottom', fontsize=9)
+                       ha='center', va='bottom', fontsize=11, fontweight='bold')
 
     ax.axhline(y=0.7, color='mediumpurple', linestyle='--', alpha=0.7, linewidth=0.8)
     
-    ax.set_xlabel('Models', fontsize=12, fontweight='bold')
-    ax.set_ylabel('Score', fontsize=12, fontweight='bold')
-    #ax.set_title('Model Performance Comparison', fontsize=14, fontweight='bold')
+    ax.set_xlabel('Models', fontsize=13, fontweight='bold')
+    ax.set_ylabel('Score', fontsize=13, fontweight='bold')
     ax.set_xticks(x + width)
-    ax.set_xticklabels(model_labels)
+    ax.set_xticklabels(model_labels, fontsize=12, fontweight='bold')
     ax.legend(loc='upper right', frameon=True, shadow=True)
     ax.grid(True, alpha=0.3, linestyle='--', axis='y')
-    ax.set_ylim([0, 1.0])
+    ax.set_ylim([0.60, 1.0])
     plt.tight_layout()
-    plt.savefig(os.path.join(output_dir, "model_comparison_bars.png"), dpi=300, bbox_inches='tight')
+    plt.savefig(os.path.join(output_dir, "object_level_model_comparison_bars.png"), dpi=300, bbox_inches='tight')
     plt.close()
     
-    # 2. THRESHOLD ANALYSIS - All metrics for all models
+    # 2. IMAGE-LEVEL GROUPED BAR CHART
+    fig, ax = plt.subplots(figsize=(12, 7))
+    
+    for i, metric in enumerate(metric_keys):
+        values = [all_model_results[m]['image_level'][metric] for m in model_order]
+        positions = x + i * width
+        color = bar_colors[color_keys[i]]
+        bars = ax.bar(positions, values, width, label=metrics[i], color=color)
+        for j, bar in enumerate(bars):
+            conf = all_model_results[model_order[j]]['image_level']['best_conf']
+            height = bar.get_height()
+            # Only show conf on F1 bars
+            if i == 0:
+                ax.text(bar.get_x() + bar.get_width()/2., height + 0.005,
+                       f'{height:.2f}\n(τ={conf:.2f})', 
+                       ha='center', va='bottom', fontsize=11, fontweight='bold')
+            else:
+                ax.text(bar.get_x() + bar.get_width()/2., height + 0.005,
+                       f'{height:.2f}', 
+                       ha='center', va='bottom', fontsize=11, fontweight='bold')
+
+    ax.axhline(y=0.7, color='mediumpurple', linestyle='--', alpha=0.7, linewidth=0.8)
+    
+    ax.set_xlabel('Models', fontsize=13, fontweight='bold')
+    ax.set_ylabel('Score', fontsize=13, fontweight='bold')
+    ax.set_xticks(x + width)
+    ax.set_xticklabels(model_labels, fontsize=12, fontweight='bold')
+    ax.legend(loc='upper right', frameon=True, shadow=True)
+    ax.grid(True, alpha=0.3, linestyle='--', axis='y')
+    ax.set_ylim([0.60, 1.0])
+    plt.tight_layout()
+    plt.savefig(os.path.join(output_dir, "image_level_model_comparison_bars.png"), dpi=300, bbox_inches='tight')
+    plt.close()
+    
+    # 3. OBJECT-LEVEL THRESHOLD ANALYSIS
     fig, axes = plt.subplots(1, 3, figsize=(18, 6))
     model_colors = {
         'YOLO_baseline': '#2E7D32',
@@ -844,7 +1120,7 @@ def create_comparison_visualizations(all_model_results, all_results_data, output
         ax = axes[idx]
         
         for model_name in model_order:
-            results_list = all_results_data[model_name]
+            results_list = all_results_data[model_name]['object_level']['all_results']
             conf_thresholds = [r['confidence_threshold'] for r in results_list]
             values = [r[metric] for r in results_list]
         
@@ -865,28 +1141,62 @@ def create_comparison_visualizations(all_model_results, all_results_data, output
         
         ax.set_xlabel('Confidence Threshold', fontsize=11)
         ax.set_ylabel(title, fontsize=11)
-        # ax.set_title(f'{title} vs Confidence Threshold', fontsize=12, fontweight='bold')
         ax.legend(loc='best')
         ax.grid(True, alpha=0.3)
         ax.set_xlim([0.05, 0.9])
         ax.set_ylim([0, 1.02])
 
-    #plt.suptitle('Threshold Analysis Comparison', fontsize=14, fontweight='bold')
     plt.tight_layout()
-    plt.savefig(os.path.join(output_dir, "threshold_analysis_comparison.png"), dpi=300, bbox_inches='tight')
+    plt.savefig(os.path.join(output_dir, "object_level_threshold_analysis_comparison.png"), dpi=300, bbox_inches='tight')
+    plt.close()
+    
+    # 4. IMAGE-LEVEL THRESHOLD ANALYSIS
+    fig, axes = plt.subplots(1, 3, figsize=(18, 6))
+
+    for idx, (metric, title) in enumerate(zip(metrics, metric_titles)):
+        ax = axes[idx]
+        
+        for model_name in model_order:
+            results_list = all_results_data[model_name]['image_level']['all_results']
+            conf_thresholds = [r['confidence_threshold'] for r in results_list]
+            values = [r[metric] for r in results_list]
+        
+            model_label = model_labels[model_order.index(model_name)]
+            ax.plot(conf_thresholds, values, 
+                    label=model_label, 
+                    color=model_colors[model_name],
+                    linewidth=2.5, marker='o', markersize=4)
+            
+            # Mark best F1 point
+            best_idx = np.argmax([r['f1_score'] for r in results_list])
+            best_conf = results_list[best_idx]['confidence_threshold']
+            best_value = results_list[best_idx][metric]
+            
+            ax.scatter(best_conf, best_value, 
+                    s=200, color=model_colors[model_name], 
+                    marker='*', edgecolors='black', linewidth=1.5, zorder=5)
+        
+        ax.set_xlabel('Confidence Threshold', fontsize=11)
+        ax.set_ylabel(title, fontsize=11)
+        ax.legend(loc='best')
+        ax.grid(True, alpha=0.3)
+        ax.set_xlim([0.05, 0.9])
+        ax.set_ylim([0, 1.02])
+
+    plt.tight_layout()
+    plt.savefig(os.path.join(output_dir, "image_level_threshold_analysis_comparison.png"), dpi=300, bbox_inches='tight')
     plt.close()
         
-    # 3. DETECTION BREAKDOWN - Grouped bars
+    # 5. OBJECT-LEVEL DETECTION BREAKDOWN
     fig, ax = plt.subplots(figsize=(12, 7))
 
-    tp_values = [all_model_results[m].get('tp', 0) for m in model_order]
-    fp_values = [all_model_results[m].get('fp', 0) for m in model_order]
-    fn_values = [all_model_results[m].get('fn', 0) for m in model_order]
+    tp_values = [all_model_results[m]['object_level'].get('tp', 0) for m in model_order]
+    fp_values = [all_model_results[m]['object_level'].get('fp', 0) for m in model_order]
+    fn_values = [all_model_results[m]['object_level'].get('fn', 0) for m in model_order]
 
     x = np.arange(len(model_order))
     width = 0.25
 
-    # Grouped bars
     bars1 = ax.bar(x - width, tp_values, width, label='True Positives', color='#2ECC71')
     bars2 = ax.bar(x, fp_values, width, label='False Positives', color='#E74C3C')
     bars3 = ax.bar(x + width, fn_values, width, label='False Negatives', color='#3498DB')
@@ -896,18 +1206,51 @@ def create_comparison_visualizations(all_model_results, all_results_data, output
         for bar in bars:
             height = bar.get_height()
             ax.text(bar.get_x() + bar.get_width()/2., height + 3,
-                    f'{int(height)}', ha='center', va='bottom', fontweight='bold')
+                    f'{int(height)}', ha='center', va='bottom', fontsize=11, fontweight='bold')
 
-    ax.set_xlabel('Models', fontsize=12, fontweight='bold')
-    ax.set_ylabel('Number of Detections', fontsize=12, fontweight='bold')
-    # ax.set_title('Detection Classification Breakdown', fontsize=14, fontweight='bold')
+    ax.set_xlabel('Models', fontsize=13, fontweight='bold')
+    ax.set_ylabel('Number of Detections', fontsize=13, fontweight='bold')
     ax.set_xticks(x)
-    ax.set_xticklabels(model_labels)
+    ax.set_xticklabels(model_labels, fontsize=12, fontweight='bold')
     ax.legend(loc='upper right')
     ax.grid(True, alpha=0.3, axis='y')
     
     plt.tight_layout()
-    plt.savefig(os.path.join(output_dir, "detection_breakdown.png"), dpi=300, bbox_inches='tight')
+    plt.savefig(os.path.join(output_dir, "object_level_detection_breakdown.png"), dpi=300, bbox_inches='tight')
+    plt.close()
+    
+    # 6. IMAGE-LEVEL DETECTION BREAKDOWN
+    fig, ax = plt.subplots(figsize=(12, 7))
+
+    tp_values = [all_model_results[m]['image_level'].get('tp', 0) for m in model_order]
+    fp_values = [all_model_results[m]['image_level'].get('fp', 0) for m in model_order]
+    fn_values = [all_model_results[m]['image_level'].get('fn', 0) for m in model_order]
+    tn_values = [all_model_results[m]['image_level'].get('tn', 0) for m in model_order]
+
+    x = np.arange(len(model_order))
+    width = 0.20
+
+    bars1 = ax.bar(x - 1.5*width, tp_values, width, label='True Positives', color='#2ECC71')
+    bars2 = ax.bar(x - 0.5*width, fp_values, width, label='False Positives', color='#E74C3C')
+    bars3 = ax.bar(x + 0.5*width, fn_values, width, label='False Negatives', color='#3498DB')
+    bars4 = ax.bar(x + 1.5*width, tn_values, width, label='True Negatives', color='#9B59B6')
+
+    # Add value labels on bars
+    for bars in [bars1, bars2, bars3, bars4]:
+        for bar in bars:
+            height = bar.get_height()
+            ax.text(bar.get_x() + bar.get_width()/2., height + 3,
+                    f'{int(height)}', ha='center', va='bottom', fontsize=11, fontweight='bold')
+
+    ax.set_xlabel('Models', fontsize=13, fontweight='bold')
+    ax.set_ylabel('Number of Images', fontsize=13, fontweight='bold')
+    ax.set_xticks(x)
+    ax.set_xticklabels(model_labels, fontsize=12, fontweight='bold')
+    ax.legend(loc='upper right')
+    ax.grid(True, alpha=0.3, axis='y')
+    
+    plt.tight_layout()
+    plt.savefig(os.path.join(output_dir, "image_level_detection_breakdown.png"), dpi=300, bbox_inches='tight')
     plt.close()
     
     print(f"Comparison visualizations saved to {output_dir}")
@@ -934,7 +1277,7 @@ if __name__ == "__main__":
     all_results_data = {}
     
     for model_name, config in models.items():
-        best_results, best_conf = evaluate_model(
+        best_obj_results, best_obj_conf, best_img_results, best_img_conf = evaluate_model(
             model_name, 
             config['type'],
             config['path'],
@@ -942,20 +1285,33 @@ if __name__ == "__main__":
         )
         
         all_model_results[model_name] = {
-            "best_f1": best_results['f1_score'],
-            "precision": best_results['precision'],
-            "recall": best_results['recall'],
-            "best_conf": best_conf,
-            "tp": int(best_results.get('tp', 0)),  
-            "fp": int(best_results.get('fp', 0)),
-            "fn": int(best_results.get('fn', 0))
+            "object_level": {
+                "best_f1": best_obj_results['f1_score'],
+                "precision": best_obj_results['precision'],
+                "recall": best_obj_results['recall'],
+                "best_conf": best_obj_conf,
+                "tp": int(best_obj_results.get('tp', 0)),  
+                "fp": int(best_obj_results.get('fp', 0)),
+                "fn": int(best_obj_results.get('fn', 0))
+            },
+            "image_level": {
+                "best_f1": best_img_results['f1_score'],
+                "precision": best_img_results['precision'],
+                "recall": best_img_results['recall'],
+                "accuracy": best_img_results['accuracy'],
+                "best_conf": best_img_conf,
+                "tp": int(best_img_results.get('tp', 0)),  
+                "fp": int(best_img_results.get('fp', 0)),
+                "fn": int(best_img_results.get('fn', 0)),
+                "tn": int(best_img_results.get('tn', 0))
+            }
         }
 
         # Load the saved results for PR curves
         summary_path = os.path.join(OUTPUT_BASE_DIR, model_name, "evaluation_summary.json")
         with open(summary_path, 'r') as f:
             summary_data = json.load(f)
-            all_results_data[model_name] = summary_data['all_results']
+            all_results_data[model_name] = summary_data
 
     # Create comparison visualizations
     create_comparison_visualizations(all_model_results, all_results_data, OUTPUT_BASE_DIR)
@@ -971,18 +1327,35 @@ if __name__ == "__main__":
     
     with open(os.path.join(OUTPUT_BASE_DIR, "final_comparison_summary.txt"), 'w') as f:
         f.write("FINAL MODEL COMPARISON\n")
-        f.write("="*60 + "\n\n")
+        f.write("="*60 + "\n")
+        f.write(f"IoU Threshold: {IOU_THRESHOLD}\n\n")
         
+        f.write("OBJECT-LEVEL RESULTS:\n")
+        f.write("-"*40 + "\n")
         for model_name, results in all_model_results.items():
             f.write(f"{model_name}:\n")
-            f.write(f"  Best F1: {results['best_f1']:.4f} @ conf={results['best_conf']:.3f}\n")
-            f.write(f"  Precision: {results['precision']:.4f}\n")
-            f.write(f"  Recall: {results['recall']:.4f}\n\n")
+            f.write(f"  Best F1: {results['object_level']['best_f1']:.4f} @ conf={results['object_level']['best_conf']:.3f}\n")
+            f.write(f"  Precision: {results['object_level']['precision']:.4f}\n")
+            f.write(f"  Recall: {results['object_level']['recall']:.4f}\n\n")
+        
+        f.write("\nIMAGE-LEVEL RESULTS:\n")
+        f.write("-"*40 + "\n")
+        for model_name, results in all_model_results.items():
+            f.write(f"{model_name}:\n")
+            f.write(f"  Best F1: {results['image_level']['best_f1']:.4f} @ conf={results['image_level']['best_conf']:.3f}\n")
+            f.write(f"  Precision: {results['image_level']['precision']:.4f}\n")
+            f.write(f"  Recall: {results['image_level']['recall']:.4f}\n")
+            f.write(f"  Accuracy: {results['image_level']['accuracy']:.4f}\n\n")
     
     print("\n" + "="*60)
     print("EVALUATION COMPLETE")
     print("Results saved to:", OUTPUT_BASE_DIR)
-    print("\nFinal Results:")
+    print("\nFinal Object-Level Results:")
     for model_name, results in all_model_results.items():
         print(f"\n{model_name}:")
-        print(f"  F1: {results['best_f1']:.4f} @ conf={results['best_conf']:.3f}")
+        print(f"  F1: {results['object_level']['best_f1']:.4f} @ conf={results['object_level']['best_conf']:.3f}")
+
+    print("\nFinal Image-Level Results:")
+    for model_name, results in all_model_results.items():
+        print(f"\n{model_name}:")
+        print(f"  F1: {results['image_level']['best_f1']:.4f} @ conf={results['image_level']['best_conf']:.3f}")
