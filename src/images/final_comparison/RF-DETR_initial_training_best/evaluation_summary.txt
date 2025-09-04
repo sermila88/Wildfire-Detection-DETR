@@ -1,0 +1,18 @@
+Model: RF-DETR_initial_training_best
+==================================================
+IoU Threshold: 0.01
+
+OBJECT-LEVEL RESULTS:
+Best Confidence Threshold: 0.300
+Best F1 Score: 0.8290
+Precision: 0.8764
+Recall: 0.7864
+TP: 383, FP: 54, FN: 104
+
+IMAGE-LEVEL RESULTS:
+Best Confidence Threshold: 0.150
+Best F1 Score: 0.9301
+Precision: 0.9108
+Recall: 0.9502
+Accuracy: 0.8769
+TP: 439, FP: 43, FN: 23, TN: 31

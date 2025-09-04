@@ -222,7 +222,10 @@ def evaluate_predictions_image_level(pred_folder, gt_folder, conf_th=0.1, cat=No
         for f in glob.glob(os.path.join(pred_folder, "*.txt"))
     ]
 
-    all_filenames = set(gt_filenames + pred_filenames)
+    # Use ALL test images:
+    test_images = glob.glob(os.path.join(TEST_IMAGES_DIR, "*.jpg"))
+    test_images.extend(glob.glob(os.path.join(TEST_IMAGES_DIR, "*.png")))
+    all_filenames = set([os.path.splitext(os.path.basename(f))[0] for f in test_images])
     
     for filename in all_filenames:
         gt_file = os.path.join(gt_folder, f"{filename}.txt")
@@ -438,19 +441,19 @@ def save_results_both_levels(best_obj_results, best_obj_conf, obj_results,
     
     plt.text(best_obj_conf + 0.02, best_obj_results['f1_score'] + 0.02,
         f"Best F1: {best_obj_results['f1_score']:.2f}",
-        fontsize=11, ha='left', va='center', color='blue', weight='bold')
+        fontsize=13, ha='left', va='center', color='blue', weight='bold')
 
     plt.text(best_obj_conf + 0.02, best_obj_results['precision'] + 0.06,
             f"Precision: {best_obj_results['precision']:.2f}",
-            fontsize=11, ha='left', va='center', color='green', weight='bold')
+            fontsize=13, ha='left', va='center', color='green', weight='bold')
 
     plt.text(best_obj_conf + 0.02, best_obj_results['recall'] - 0.06,
             f"Recall: {best_obj_results['recall']:.2f}",
-            fontsize=11, ha='left', va='center', color='red', weight='bold')
+            fontsize=13, ha='left', va='center', color='red', weight='bold')
     
-    plt.xlabel("Confidence Threshold")
-    plt.ylabel("Metric Value")
-    plt.legend()
+    plt.xlabel("Confidence Threshold", fontsize=14)
+    plt.ylabel("Metric Value", fontsize=14)
+    plt.legend(fontsize=12)
     plt.grid(True)
     plt.tight_layout()
     plt.savefig(os.path.join(plots_dir, "object_level_metrics.png"), bbox_inches='tight', dpi=150)
@@ -475,23 +478,23 @@ def save_results_both_levels(best_obj_results, best_obj_conf, obj_results,
     
     plt.text(best_img_conf + 0.02, best_img_results['f1_score'] + 0.02,
         f"Best F1: {best_img_results['f1_score']:.2f}",
-        fontsize=11, ha='left', va='center', color='blue', weight='bold')
+        fontsize=13, ha='left', va='center', color='blue', weight='bold')
 
     plt.text(best_img_conf + 0.02, best_img_results['precision'] + 0.06,
             f"Precision: {best_img_results['precision']:.2f}",
-            fontsize=11, ha='left', va='center', color='green', weight='bold')
+            fontsize=13, ha='left', va='center', color='green', weight='bold')
 
     plt.text(best_img_conf + 0.02, best_img_results['recall'] - 0.06,
             f"Recall: {best_img_results['recall']:.2f}",
-            fontsize=11, ha='left', va='center', color='red', weight='bold')
+            fontsize=13, ha='left', va='center', color='red', weight='bold')
     
     plt.text(best_img_conf + 0.02, best_img_results['accuracy'] - 0.10,
             f"Accuracy: {best_img_results['accuracy']:.2f}",
-            fontsize=11, ha='left', va='center', color='purple', weight='bold')
+            fontsize=13, ha='left', va='center', color='purple', weight='bold')
     
-    plt.xlabel("Confidence Threshold")
-    plt.ylabel("Metric Value")
-    plt.legend()
+    plt.xlabel("Confidence Threshold", fontsize=14)
+    plt.ylabel("Metric Value", fontsize=14)
+    plt.legend(fontsize=12)
     plt.grid(True)
     plt.tight_layout()
     plt.savefig(os.path.join(plots_dir, "image_level_metrics.png"), bbox_inches='tight', dpi=150)
@@ -1022,7 +1025,7 @@ def find_best_conf_threshold_and_plot(
 def create_comparison_visualizations(all_model_results, all_results_data, output_dir):
     """Create comparison plots for all models - both object and image level"""
     
-    model_order = ['YOLO_baseline', 'RT-DETR_initial_training_NMS', 'RF-DETR_initial_training_NMS']
+    model_order = ['YOLO_baseline', 'RT-DETR_best_hparams', 'RF-DETR_initial_training_best']
     model_labels = ['YOLOv8', 'RT-DETR', 'RF-DETR']
 
     # Consistent colors across models
@@ -1064,7 +1067,7 @@ def create_comparison_visualizations(all_model_results, all_results_data, output
     ax.set_ylabel('Score', fontsize=13, fontweight='bold')
     ax.set_xticks(x + width)
     ax.set_xticklabels(model_labels, fontsize=12, fontweight='bold')
-    ax.legend(loc='upper right', frameon=True, shadow=True)
+    ax.legend(loc='upper right', frameon=True, shadow=True,fontsize=11) 
     ax.grid(True, alpha=0.3, linestyle='--', axis='y')
     ax.set_ylim([0.60, 1.0])
     plt.tight_layout()
@@ -1098,7 +1101,7 @@ def create_comparison_visualizations(all_model_results, all_results_data, output
     ax.set_ylabel('Score', fontsize=13, fontweight='bold')
     ax.set_xticks(x + width)
     ax.set_xticklabels(model_labels, fontsize=12, fontweight='bold')
-    ax.legend(loc='upper right', frameon=True, shadow=True)
+    ax.legend(loc='upper right', frameon=True, shadow=True, fontsize=11)
     ax.grid(True, alpha=0.3, linestyle='--', axis='y')
     ax.set_ylim([0.60, 1.0])
     plt.tight_layout()
@@ -1109,8 +1112,8 @@ def create_comparison_visualizations(all_model_results, all_results_data, output
     fig, axes = plt.subplots(1, 3, figsize=(18, 6))
     model_colors = {
         'YOLO_baseline': '#2E7D32',
-        'RF-DETR_initial_training_NMS': '#6A1B9A', 
-        'RT-DETR_initial_training_NMS': '#1565C0'
+        'RF-DETR_initial_training_best': '#6A1B9A', 
+        'RT-DETR_best_hparams': '#1565C0'
     }
 
     metrics = ['f1_score', 'precision', 'recall']
@@ -1139,9 +1142,9 @@ def create_comparison_visualizations(all_model_results, all_results_data, output
                     s=200, color=model_colors[model_name], 
                     marker='*', edgecolors='black', linewidth=1.5, zorder=5)
         
-        ax.set_xlabel('Confidence Threshold', fontsize=11)
-        ax.set_ylabel(title, fontsize=11)
-        ax.legend(loc='best')
+        ax.set_xlabel('Confidence Threshold', fontsize=13)
+        ax.set_ylabel(title, fontsize=13)
+        ax.legend(loc='best', fontsize=11)
         ax.grid(True, alpha=0.3)
         ax.set_xlim([0.05, 0.9])
         ax.set_ylim([0, 1.02])
@@ -1176,9 +1179,9 @@ def create_comparison_visualizations(all_model_results, all_results_data, output
                     s=200, color=model_colors[model_name], 
                     marker='*', edgecolors='black', linewidth=1.5, zorder=5)
         
-        ax.set_xlabel('Confidence Threshold', fontsize=11)
-        ax.set_ylabel(title, fontsize=11)
-        ax.legend(loc='best')
+        ax.set_xlabel('Confidence Threshold', fontsize=13)
+        ax.set_ylabel(title, fontsize=13)
+        ax.legend(loc='best', fontsize=11)
         ax.grid(True, alpha=0.3)
         ax.set_xlim([0.05, 0.9])
         ax.set_ylim([0, 1.02])
@@ -1208,11 +1211,11 @@ def create_comparison_visualizations(all_model_results, all_results_data, output
             ax.text(bar.get_x() + bar.get_width()/2., height + 3,
                     f'{int(height)}', ha='center', va='bottom', fontsize=11, fontweight='bold')
 
-    ax.set_xlabel('Models', fontsize=13, fontweight='bold')
-    ax.set_ylabel('Number of Detections', fontsize=13, fontweight='bold')
+    ax.set_xlabel('Models', fontsize=15, fontweight='bold')
+    ax.set_ylabel('Number of Detections', fontsize=15, fontweight='bold')
     ax.set_xticks(x)
-    ax.set_xticklabels(model_labels, fontsize=12, fontweight='bold')
-    ax.legend(loc='upper right')
+    ax.set_xticklabels(model_labels, fontsize=14)
+    ax.legend(loc='upper right', fontsize=11)
     ax.grid(True, alpha=0.3, axis='y')
     
     plt.tight_layout()
@@ -1242,11 +1245,11 @@ def create_comparison_visualizations(all_model_results, all_results_data, output
             ax.text(bar.get_x() + bar.get_width()/2., height + 3,
                     f'{int(height)}', ha='center', va='bottom', fontsize=11, fontweight='bold')
 
-    ax.set_xlabel('Models', fontsize=13, fontweight='bold')
-    ax.set_ylabel('Number of Images', fontsize=13, fontweight='bold')
+    ax.set_xlabel('Models', fontsize=15, fontweight='bold')
+    ax.set_ylabel('Number of Images', fontsize=15, fontweight='bold')
     ax.set_xticks(x)
-    ax.set_xticklabels(model_labels, fontsize=12, fontweight='bold')
-    ax.legend(loc='upper right')
+    ax.set_xticklabels(model_labels, fontsize=14)
+    ax.legend(loc='upper right', fontsize=11)
     ax.grid(True, alpha=0.3, axis='y')
     
     plt.tight_layout()
@@ -1262,11 +1265,11 @@ if __name__ == "__main__":
             "type": "YOLO",
             "path": "/vol/bitbucket/si324/rf-detr-wildfire/src/images/outputs/YOLO_baseline/training_outputs/eager-flower-1/weights/best.pt"
         },
-        "RF-DETR_initial_training_NMS": {
+        "RF-DETR_initial_training_best": {
             "type": "RF-DETR",
             "path": "/vol/bitbucket/si324/rf-detr-wildfire/src/images/outputs/RF-DETR_initial_training/checkpoints/checkpoint_best_ema.pth"
         },
-        "RT-DETR_initial_training_NMS": {
+        "RT-DETR_best_hparams": {
             "type": "RT-DETR",
             "path": "/vol/bitbucket/si324/rf-detr-wildfire/src/images/outputs/RT-DETR_hyperparameter_tuning/trial_009/checkpoints/weights/best.pt"
         }
