@@ -475,22 +475,30 @@ def save_results_both_levels(best_obj_results, best_obj_conf, obj_results,
     plt.scatter(best_img_conf, best_img_results['precision'], color="green", s=100, edgecolor="k", zorder=5)
     plt.scatter(best_img_conf, best_img_results['recall'], color="red", s=100, edgecolor="k", zorder=5)
     plt.scatter(best_img_conf, best_img_results['accuracy'], color="purple", s=100, edgecolor="k", zorder=5)
-    
-    plt.text(best_img_conf + 0.02, best_img_results['f1_score'] + 0.02,
-        f"Best F1: {best_img_results['f1_score']:.2f}",
-        fontsize=13, ha='left', va='center', color='blue', weight='bold')
 
-    plt.text(best_img_conf + 0.02, best_img_results['precision'] + 0.06,
-            f"Precision: {best_img_results['precision']:.2f}",
-            fontsize=13, ha='left', va='center', color='green', weight='bold')
-
-    plt.text(best_img_conf + 0.02, best_img_results['recall'] - 0.06,
-            f"Recall: {best_img_results['recall']:.2f}",
-            fontsize=13, ha='left', va='center', color='red', weight='bold')
+    plt.ylim([0, 1.15])
     
-    plt.text(best_img_conf + 0.02, best_img_results['accuracy'] - 0.10,
-            f"Accuracy: {best_img_results['accuracy']:.2f}",
-            fontsize=13, ha='left', va='center', color='purple', weight='bold')
+    # All labels to the RIGHT of dots, horizontally aligned
+    label_x = best_img_conf + 0.03  
+
+    # Create list of (value, label, color) and sort by value
+    labels_data = [
+        (best_img_results['recall'], f"Recall: {best_img_results['recall']:.2f}", 'red'),
+        (best_img_results['f1_score'], f"Best F1: {best_img_results['f1_score']:.2f}", 'blue'),
+        (best_img_results['precision'], f"Precision: {best_img_results['precision']:.2f}", 'green'),
+        (best_img_results['accuracy'], f"Accuracy: {best_img_results['accuracy']:.2f}", 'purple')
+    ]
+    labels_data.sort(key=lambda x: x[0], reverse=True)  # Sort highest to lowest
+
+    # Position labels with guaranteed spacing
+    for i, (value, text, color) in enumerate(labels_data):
+        # Start from highest value, space each label 0.065 apart
+        y_pos = labels_data[0][0] + 0.02 - (i * 0.08)
+        
+        plt.text(label_x, y_pos, text,
+            fontsize=13, ha='left', va='center', color=color, weight='bold',
+            bbox=dict(boxstyle='round,pad=0.2', facecolor='white', 
+                    edgecolor='none', alpha=0.3)) 
     
     plt.xlabel("Confidence Threshold", fontsize=14)
     plt.ylabel("Metric Value", fontsize=14)
@@ -1063,11 +1071,11 @@ def create_comparison_visualizations(all_model_results, all_results_data, output
 
     ax.axhline(y=0.7, color='mediumpurple', linestyle='--', alpha=0.7, linewidth=0.8)
     
-    ax.set_xlabel('Models', fontsize=13, fontweight='bold')
-    ax.set_ylabel('Score', fontsize=13, fontweight='bold')
+    ax.set_xlabel('Models', fontsize=15, fontweight='bold')
+    ax.set_ylabel('Score', fontsize=15, fontweight='bold')
     ax.set_xticks(x + width)
-    ax.set_xticklabels(model_labels, fontsize=12, fontweight='bold')
-    ax.legend(loc='upper right', frameon=True, shadow=True,fontsize=11) 
+    ax.set_xticklabels(model_labels, fontsize=14)
+    ax.legend(loc='upper right', frameon=True, shadow=True,fontsize=12) 
     ax.grid(True, alpha=0.3, linestyle='--', axis='y')
     ax.set_ylim([0.60, 1.0])
     plt.tight_layout()
@@ -1097,13 +1105,13 @@ def create_comparison_visualizations(all_model_results, all_results_data, output
 
     ax.axhline(y=0.7, color='mediumpurple', linestyle='--', alpha=0.7, linewidth=0.8)
     
-    ax.set_xlabel('Models', fontsize=13, fontweight='bold')
-    ax.set_ylabel('Score', fontsize=13, fontweight='bold')
+    ax.set_xlabel('Models', fontsize=15, fontweight='bold')
+    ax.set_ylabel('Score', fontsize=15, fontweight='bold')
     ax.set_xticks(x + width)
-    ax.set_xticklabels(model_labels, fontsize=12, fontweight='bold')
-    ax.legend(loc='upper right', frameon=True, shadow=True, fontsize=11)
+    ax.set_xticklabels(model_labels, fontsize=14)
+    ax.legend(loc='upper right', frameon=True, shadow=True, fontsize=12)
     ax.grid(True, alpha=0.3, linestyle='--', axis='y')
-    ax.set_ylim([0.60, 1.0])
+    ax.set_ylim([0.60, 1.09])
     plt.tight_layout()
     plt.savefig(os.path.join(output_dir, "image_level_model_comparison_bars.png"), dpi=300, bbox_inches='tight')
     plt.close()
@@ -1142,12 +1150,12 @@ def create_comparison_visualizations(all_model_results, all_results_data, output
                     s=200, color=model_colors[model_name], 
                     marker='*', edgecolors='black', linewidth=1.5, zorder=5)
         
-        ax.set_xlabel('Confidence Threshold', fontsize=13)
-        ax.set_ylabel(title, fontsize=13)
-        ax.legend(loc='best', fontsize=11)
+        ax.set_xlabel('Confidence Threshold', fontsize=15)
+        ax.set_ylabel(title, fontsize=15)
+        ax.legend(loc='best', fontsize=12)
         ax.grid(True, alpha=0.3)
         ax.set_xlim([0.05, 0.9])
-        ax.set_ylim([0, 1.02])
+        ax.set_ylim([0, 1.05])
 
     plt.tight_layout()
     plt.savefig(os.path.join(output_dir, "object_level_threshold_analysis_comparison.png"), dpi=300, bbox_inches='tight')
@@ -1179,12 +1187,12 @@ def create_comparison_visualizations(all_model_results, all_results_data, output
                     s=200, color=model_colors[model_name], 
                     marker='*', edgecolors='black', linewidth=1.5, zorder=5)
         
-        ax.set_xlabel('Confidence Threshold', fontsize=13)
-        ax.set_ylabel(title, fontsize=13)
-        ax.legend(loc='best', fontsize=11)
+        ax.set_xlabel('Confidence Threshold', fontsize=15)
+        ax.set_ylabel(title, fontsize=15)
+        ax.legend(loc='best', fontsize=12)
         ax.grid(True, alpha=0.3)
         ax.set_xlim([0.05, 0.9])
-        ax.set_ylim([0, 1.02])
+        ax.set_ylim([0, 1.05])
 
     plt.tight_layout()
     plt.savefig(os.path.join(output_dir, "image_level_threshold_analysis_comparison.png"), dpi=300, bbox_inches='tight')
@@ -1215,7 +1223,7 @@ def create_comparison_visualizations(all_model_results, all_results_data, output
     ax.set_ylabel('Number of Detections', fontsize=15, fontweight='bold')
     ax.set_xticks(x)
     ax.set_xticklabels(model_labels, fontsize=14)
-    ax.legend(loc='upper right', fontsize=11)
+    ax.legend(loc='upper right', fontsize=12)
     ax.grid(True, alpha=0.3, axis='y')
     
     plt.tight_layout()
@@ -1249,7 +1257,7 @@ def create_comparison_visualizations(all_model_results, all_results_data, output
     ax.set_ylabel('Number of Images', fontsize=15, fontweight='bold')
     ax.set_xticks(x)
     ax.set_xticklabels(model_labels, fontsize=14)
-    ax.legend(loc='upper right', fontsize=11)
+    ax.legend(loc='upper right', fontsize=12)
     ax.grid(True, alpha=0.3, axis='y')
     
     plt.tight_layout()

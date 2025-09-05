@@ -15,9 +15,9 @@ RF-DETR_initial_training_best:
   Recall: 0.7864
 
 RT-DETR_best_hparams:
-  Best F1: 0.8170 @ conf=0.450
-  Precision: 0.8477
-  Recall: 0.7885
+  Best F1: 0.8183 @ conf=0.450
+  Precision: 0.8480
+  Recall: 0.7906
 
 
 IMAGE-LEVEL RESULTS:
@@ -29,10 +29,10 @@ YOLO_baseline:
   Accuracy: 0.7481
 
 RF-DETR_initial_training_best:
-  Best F1: 0.9301 @ conf=0.150
-  Precision: 0.9108
-  Recall: 0.9502
-  Accuracy: 0.8769
+  Best F1: 0.9307 @ conf=0.200
+  Precision: 0.9463
+  Recall: 0.9156
+  Accuracy: 0.8825
 
 RT-DETR_best_hparams:
   Best F1: 0.9257 @ conf=0.150

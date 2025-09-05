@@ -12,7 +12,7 @@ RF-DETR_initial_training:
   Recall: 0.7310
 
 RT-DETR_initial_training:
-  Best F1: 0.7210 @ conf=0.450
-  Precision: 0.7551
-  Recall: 0.6899
+  Best F1: 0.7224 @ conf=0.450
+  Precision: 0.7556
+  Recall: 0.6920
 

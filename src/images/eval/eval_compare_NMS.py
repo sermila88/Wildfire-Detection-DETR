@@ -348,20 +348,20 @@ def save_results(best_results, best_conf, all_results, output_dir, model_name, p
     
     plt.text(best_conf + 0.02, best_results['f1_score'] + 0.02,
         f"Best F1: {best_results['f1_score']:.2f}",
-        fontsize=9, ha='left', va='center', color='blue', weight='bold')
+        fontsize=13, ha='left', va='center', color='blue', weight='bold')
 
-    plt.text(best_conf + 0.02, best_results['precision'] + 0.06,
+    plt.text(best_conf + 0.02, best_results['precision'] + 0.09,
             f"Precision: {best_results['precision']:.2f}",
-            fontsize=9, ha='left', va='center', color='green', weight='bold')
+            fontsize=13, ha='left', va='center', color='green', weight='bold')
 
-    plt.text(best_conf + 0.02, best_results['recall'] - 0.06,
+    plt.text(best_conf + 0.02, best_results['recall'] - 0.08,
             f"Recall: {best_results['recall']:.2f}",
-            fontsize=9, ha='left', va='center', color='red', weight='bold')
+            fontsize=13, ha='left', va='center', color='red', weight='bold')
     
     #plt.title(f"{model_name}: F1 Score, Precision, and Recall vs. Confidence Threshold")
-    plt.xlabel("Confidence Threshold")
-    plt.ylabel("Metric Value")
-    plt.legend()
+    plt.xlabel("Confidence Threshold", fontsize=14)
+    plt.ylabel("Metric Value", fontsize=14)
+    plt.legend(fontsize=12)
     plt.grid(True)
     plt.savefig(os.path.join(plots_dir, "metrics.png"), bbox_inches='tight', dpi=150)
     plt.close()
@@ -809,22 +809,22 @@ def create_comparison_visualizations(all_model_results, all_results_data, output
             if i == 0:
                 ax.text(bar.get_x() + bar.get_width()/2., height + 0.005,
                        f'{height:.2f}\n(τ={conf:.2f})', 
-                       ha='center', va='bottom', fontsize=9, fontweight='bold')
+                       ha='center', va='bottom', fontsize=11, fontweight='bold')
             else:
                 ax.text(bar.get_x() + bar.get_width()/2., height + 0.005,
                        f'{height:.2f}', 
-                       ha='center', va='bottom', fontsize=9)
+                       ha='center', va='bottom', fontsize=11, fontweight='bold')
 
     ax.axhline(y=0.7, color='mediumpurple', linestyle='--', alpha=0.7, linewidth=0.8)
     
-    ax.set_xlabel('Models', fontsize=12, fontweight='bold')
-    ax.set_ylabel('Score', fontsize=12, fontweight='bold')
+    ax.set_xlabel('Models', fontsize=15, fontweight='bold')
+    ax.set_ylabel('Score', fontsize=15, fontweight='bold')
     #ax.set_title('Model Performance Comparison', fontsize=14, fontweight='bold')
     ax.set_xticks(x + width)
-    ax.set_xticklabels(model_labels)
-    ax.legend(loc='upper right', frameon=True, shadow=True)
+    ax.set_xticklabels(model_labels, fontsize=14)
+    ax.legend(loc='upper right', frameon=True, shadow=True, fontsize=12)
     ax.grid(True, alpha=0.3, linestyle='--', axis='y')
-    ax.set_ylim([0, 1.0])
+    ax.set_ylim([0.60, 1.0])
     plt.tight_layout()
     plt.savefig(os.path.join(output_dir, "model_comparison_bars.png"), dpi=300, bbox_inches='tight')
     plt.close()
@@ -863,10 +863,10 @@ def create_comparison_visualizations(all_model_results, all_results_data, output
                     s=200, color=model_colors[model_name], 
                     marker='*', edgecolors='black', linewidth=1.5, zorder=5)
         
-        ax.set_xlabel('Confidence Threshold', fontsize=11)
-        ax.set_ylabel(title, fontsize=11)
+        ax.set_xlabel('Confidence Threshold', fontsize=15)
+        ax.set_ylabel(title, fontsize=15)
         # ax.set_title(f'{title} vs Confidence Threshold', fontsize=12, fontweight='bold')
-        ax.legend(loc='best')
+        ax.legend(loc='best', fontsize=12)
         ax.grid(True, alpha=0.3)
         ax.set_xlim([0.05, 0.9])
         ax.set_ylim([0, 1.02])
@@ -896,14 +896,14 @@ def create_comparison_visualizations(all_model_results, all_results_data, output
         for bar in bars:
             height = bar.get_height()
             ax.text(bar.get_x() + bar.get_width()/2., height + 3,
-                    f'{int(height)}', ha='center', va='bottom', fontweight='bold')
+                    f'{int(height)}', ha='center', va='bottom', fontsize=11, fontweight='bold')
 
-    ax.set_xlabel('Models', fontsize=12, fontweight='bold')
-    ax.set_ylabel('Number of Detections', fontsize=12, fontweight='bold')
+    ax.set_xlabel('Models', fontsize=15, fontweight='bold')
+    ax.set_ylabel('Number of Detections', fontsize=15, fontweight='bold')
     # ax.set_title('Detection Classification Breakdown', fontsize=14, fontweight='bold')
     ax.set_xticks(x)
-    ax.set_xticklabels(model_labels)
-    ax.legend(loc='upper right')
+    ax.set_xticklabels(model_labels, fontsize=14)
+    ax.legend(loc='upper right', fontsize=12)
     ax.grid(True, alpha=0.3, axis='y')
     
     plt.tight_layout()

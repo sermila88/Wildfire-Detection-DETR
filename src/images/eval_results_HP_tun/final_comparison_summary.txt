@@ -1,0 +1,18 @@
+FINAL MODEL COMPARISON
+============================================================
+
+YOLO_baseline:
+  Best F1: 0.7001 @ conf=0.100
+  Precision: 0.7289
+  Recall: 0.6735
+
+RF-DETR_hparam_tuning_NMS:
+  Best F1: 0.7579 @ conf=0.250
+  Precision: 0.8041
+  Recall: 0.7166
+
+RT-DETR_hparam_tuning_NMS:
+  Best F1: 0.7745 @ conf=0.450
+  Precision: 0.8035
+  Recall: 0.7474
+
