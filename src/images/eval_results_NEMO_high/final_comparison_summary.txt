@@ -1,0 +1,18 @@
+FINAL MODEL COMPARISON
+============================================================
+
+YOLO_baseline:
+  Best F1: 0.7296 @ conf=0.100
+  Precision: 0.7870
+  Recall: 0.6800
+
+RF-DETR_initial_training_NMS:
+  Best F1: 0.9194 @ conf=0.250
+  Precision: 0.9268
+  Recall: 0.9120
+
+RT-DETR_HP_best:
+  Best F1: 0.9023 @ conf=0.350
+  Precision: 0.8817
+  Recall: 0.9240
+

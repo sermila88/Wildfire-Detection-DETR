@@ -1,0 +1,12 @@
+Model: RT-DETR_HP_best
+==================================================
+Best Confidence Threshold: 0.350
+Best F1 Score: 0.9173
+Best Precision: 0.9031
+Best Recall: 0.9320
+
+Confusion Matrix:
+TP: 236
+FP: 26
+FN: 17
+TN: N/A (not applicable for object detection)

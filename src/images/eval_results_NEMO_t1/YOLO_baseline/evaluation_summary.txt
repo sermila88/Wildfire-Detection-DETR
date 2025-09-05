@@ -1,0 +1,12 @@
+Model: YOLO_baseline
+==================================================
+Best Confidence Threshold: 0.100
+Best F1 Score: 0.6504
+Best Precision: 0.8522
+Best Recall: 0.5258
+
+Confusion Matrix:
+TP: 186
+FP: 30
+FN: 238
+TN: N/A (not applicable for object detection)
