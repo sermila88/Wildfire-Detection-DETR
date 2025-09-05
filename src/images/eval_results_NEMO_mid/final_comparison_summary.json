@@ -1,0 +1,32 @@
+{
+  "timestamp": "2025-09-05 11:12:36",
+  "models": {
+    "YOLO_baseline": {
+      "best_f1": 0.7124463519313305,
+      "precision": 0.7685185185185185,
+      "recall": 0.664,
+      "best_conf": 0.1,
+      "tp": 166,
+      "fp": 50,
+      "fn": 84
+    },
+    "RF-DETR_initial_training_NMS": {
+      "best_f1": 0.927536231884058,
+      "precision": 0.9613733905579399,
+      "recall": 0.896,
+      "best_conf": 0.30000000000000004,
+      "tp": 224,
+      "fp": 9,
+      "fn": 26
+    },
+    "RT-DETR_HP_best": {
+      "best_f1": 0.91015625,
+      "precision": 0.8893129770992366,
+      "recall": 0.932,
+      "best_conf": 0.3500000000000001,
+      "tp": 233,
+      "fp": 29,
+      "fn": 17
+    }
+  }
+}

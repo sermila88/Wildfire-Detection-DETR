@@ -85,28 +85,23 @@ def convert_nemo_annotations_to_yolo(nemo_val_dir, output_dir):
                 elif "high" in class_title:
                     high_smoke_boxes.append(box)
         
-        # Select ONE box based on priority: low > mid > high
+        # Select ONE box based on priority: mid > low > high
         selected_box = None
         selected_type = None
-        
-        if low_smoke_boxes:
-            # If multiple low smoke boxes, pick the largest one
-            selected_box = max(low_smoke_boxes, key=lambda x: x[4])
-            selected_type = "low"
-        elif mid_smoke_boxes:
+
+        if mid_smoke_boxes:
             # If multiple mid smoke boxes, pick the largest one
             selected_box = max(mid_smoke_boxes, key=lambda x: x[4])
             selected_type = "mid"
+        elif low_smoke_boxes:
+            # If multiple low smoke boxes, pick the largest one
+            selected_box = max(low_smoke_boxes, key=lambda x: x[4])
+            selected_type = "low"
         elif high_smoke_boxes:
             # If multiple high smoke boxes, pick the largest one
             selected_box = max(high_smoke_boxes, key=lambda x: x[4])
             selected_type = "high"
-        
-        if not selected_box:
-            label_file.touch()  # Empty file if no smoke found
-            stats["empty"] += 1
-            continue
-        
+                
         # Convert the single selected box to YOLO format
         x1, y1, x2, y2, _ = selected_box
         center_x = ((x1 + x2) / 2) / img_width
