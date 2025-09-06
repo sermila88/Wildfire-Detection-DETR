@@ -32,10 +32,11 @@ object_level_bounding_boxes_RF-DETR
 image_level_bounding_boxes_YOLO
 object_level_bounding_boxes_YOLO
 nemo_converted_labels
+OLD_final_compareNemo_ground_truth_BB
+Nemo_ground_truth_BB
+pyro_readme_datasets_initial_eval
 OLD_final_compare
-
-
-
+NEMO_evaluation_x
 
 # SLURM job outputs
 *.out

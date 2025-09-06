@@ -1,0 +1,18 @@
+Model: RT-DETR_best_hparams
+==================================================
+IoU Threshold: 0.01
+
+OBJECT-LEVEL RESULTS:
+Best Confidence Threshold: 0.500
+Best F1 Score: 0.8571
+Precision: 0.9044
+Recall: 0.8146
+TP: 123, FP: 13, FN: 28
+
+IMAGE-LEVEL RESULTS:
+Best Confidence Threshold: 0.250
+Best F1 Score: 0.9587
+Precision: 0.9207
+Recall: 1.0000
+Accuracy: 0.9217
+TP: 151, FP: 13, FN: 0, TN: 2

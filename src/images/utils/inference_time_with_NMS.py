@@ -1,4 +1,4 @@
-# Inference time compare
+# Inference compare
 
 import glob
 import os
@@ -14,6 +14,7 @@ import torch
 import gc
 import platform, psutil
 import sys
+import cv2
 
 # Add path for eval functions
 sys.path.append('/vol/bitbucket/si324/rf-detr-wildfire/src/images')
@@ -49,19 +50,56 @@ def load_models(model_type, model_path):
         return model
     return None
 
+def apply_nms_to_predictions(predictions, iou_threshold=0.01):
+    """Apply NMS to DETR predictions - matching YOLO's iou=0.01"""
+    if not hasattr(predictions, 'xyxy') or len(predictions.xyxy) == 0:
+        return predictions
+    
+    boxes = []
+    scores = []
+    
+    # Convert predictions to cv2 format
+    for i, box in enumerate(predictions.xyxy):
+        boxes.append([box[0], box[1], box[2], box[3]])
+        scores.append(predictions.confidence[i] if hasattr(predictions, 'confidence') else 1.0)
+    
+    if not boxes:
+        return predictions
+    
+    # Apply NMS
+    indices = cv2.dnn.NMSBoxes(
+        bboxes=boxes,
+        scores=scores,
+        score_threshold=0.01,
+        nms_threshold=iou_threshold
+    )
+    
+    # Filter predictions
+    if len(indices) > 0:
+        indices = indices.flatten()
+        predictions.xyxy = predictions.xyxy[indices]
+        if hasattr(predictions, 'confidence'):
+            predictions.confidence = predictions.confidence[indices]
+    
+    return predictions
+
 def generate_rfdetr_predictions(model, image_path, conf_threshold):
-    """Generate RF-DETR predictions - exact copy from eval script"""
+    """Generate RF-DETR predictions with NMS - matching deployment config"""
     with Image.open(image_path) as img:
         img_rgb = img.convert("RGB")
         predictions = model.predict(img_rgb, threshold=conf_threshold)
+    # Apply NMS to match YOLO's post-processing
+    predictions = apply_nms_to_predictions(predictions, iou_threshold=0.01)
     return predictions
 
 def generate_rtdetr_predictions(model, image_path, conf_threshold):
-    """Generate RT-DETR predictions - exact copy from eval script"""
+    """Generate RT-DETR predictions with NMS - matching deployment config"""
     with Image.open(image_path) as img:
         img_rgb = img.convert("RGB")
         results = model.predict(source=img_rgb, conf=conf_threshold, verbose=False, device='cpu')
         predictions = sv.Detections.from_ultralytics(results[0])
+    # Apply NMS to match YOLO's post-processing
+    predictions = apply_nms_to_predictions(predictions, iou_threshold=0.01)
     return predictions
 
 def run_single_inference(model, model_type, image_path):
@@ -220,7 +258,7 @@ if __name__ == "__main__":
     
     # Save results
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    output_file = os.path.join(OUTPUT_BASE_DIR, f"benchmark_results_cpu_{timestamp}.json")
+    output_file = os.path.join(OUTPUT_BASE_DIR, f"benchmark_results_cpu_with_nms_{timestamp}.json")
     
     with open(output_file, 'w') as f:
         json.dump({

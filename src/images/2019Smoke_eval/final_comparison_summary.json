@@ -1,0 +1,71 @@
+{
+  "timestamp": "2025-09-05 21:15:44",
+  "models": {
+    "YOLO_baseline": {
+      "object_level": {
+        "best_f1": 0.7732342007434945,
+        "precision": 0.8813559322033898,
+        "recall": 0.6887417218543046,
+        "best_conf": 0.1,
+        "tp": 104,
+        "fp": 14,
+        "fn": 47
+      },
+      "image_level": {
+        "best_f1": 0.8257575757575758,
+        "precision": 0.9646017699115044,
+        "recall": 0.7218543046357616,
+        "accuracy": 0.7228915662650602,
+        "best_conf": 0.1,
+        "tp": 109,
+        "fp": 4,
+        "fn": 42,
+        "tn": 11
+      }
+    },
+    "RF-DETR_initial_training_best": {
+      "object_level": {
+        "best_f1": 0.9055374592833878,
+        "precision": 0.8910256410256411,
+        "recall": 0.9205298013245033,
+        "best_conf": 0.30000000000000004,
+        "tp": 139,
+        "fp": 17,
+        "fn": 12
+      },
+      "image_level": {
+        "best_f1": 0.9526813880126183,
+        "precision": 0.9096385542168675,
+        "recall": 1.0,
+        "accuracy": 0.9096385542168675,
+        "best_conf": 0.1,
+        "tp": 151,
+        "fp": 15,
+        "fn": 0,
+        "tn": 0
+      }
+    },
+    "RT-DETR_best_hparams": {
+      "object_level": {
+        "best_f1": 0.8571428571428571,
+        "precision": 0.9044117647058824,
+        "recall": 0.8145695364238411,
+        "best_conf": 0.5000000000000001,
+        "tp": 123,
+        "fp": 13,
+        "fn": 28
+      },
+      "image_level": {
+        "best_f1": 0.9587301587301587,
+        "precision": 0.9207317073170732,
+        "recall": 1.0,
+        "accuracy": 0.9216867469879518,
+        "best_conf": 0.25000000000000006,
+        "tp": 151,
+        "fp": 13,
+        "fn": 0,
+        "tn": 2
+      }
+    }
+  }
+}
