@@ -1,6 +1,6 @@
 {
   "model_name": "RT-DETR_best_hparams",
-  "timestamp": "2025-09-09 12:48:39",
+  "timestamp": "2025-09-09 11:40:12",
   "iou_threshold": 0.01,
   "object_level": {
     "best_confidence_threshold": 0.45000000000000007,

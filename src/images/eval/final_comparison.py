@@ -233,8 +233,10 @@ def evaluate_predictions_image_level(pred_folder, gt_folder, conf_th=0.1, cat=No
         
         has_smoke_gt = len(gt_boxes) > 0
         
-        # Check if any prediction spatially overlaps with GT
-        has_valid_detection = False
+        # Check if any prediction exists and if it overlaps with GT
+        has_any_detection = False
+        has_overlapping_detection = False
+        
         if os.path.isfile(pred_file) and os.path.getsize(pred_file) > 0:
             with open(pred_file, "r") as f:
                 for line in f.readlines():
@@ -242,28 +244,24 @@ def evaluate_predictions_image_level(pred_folder, gt_folder, conf_th=0.1, cat=No
                     if len(parts) >= 6:
                         _, x, y, w, h, conf = map(float, parts)
                         if conf >= conf_th:
+                            has_any_detection = True
                             pred_box = xywh2xyxy(np.array([x, y, w, h]))
                             
-                            # If GT exists, check IoU
                             if gt_boxes:
                                 iou_values = [box_iou(pred_box, gt_box) for gt_box in gt_boxes]
                                 max_iou = max(iou_values)
                                 if max_iou > IOU_THRESHOLD:
-                                    has_valid_detection = True
+                                    has_overlapping_detection = True
                                     break
-                            else:
-                                # No GT, so any detection is FP
-                                has_valid_detection = True
-                                break
 
         # Image-level classification
         if has_smoke_gt:
-            if has_valid_detection:
+            if has_overlapping_detection:
                 img_tp += 1
             else:
                 img_fn += 1
         else:
-            if has_valid_detection:
+            if has_any_detection:
                 img_fp += 1
             else:
                 img_tn += 1
@@ -769,8 +767,10 @@ def generate_bounding_boxes_both_levels(model_name, model_type, pred_dir, best_o
         
         has_smoke_gt = len(gt_boxes) > 0
         
-        # Check if any prediction spatially overlaps with GT
-        has_valid_detection = False
+        # Check if any prediction exists and if it overlaps with GT
+        has_any_detection = False
+        has_overlapping_detection = False
+        
         if os.path.isfile(pred_file) and os.path.getsize(pred_file) > 0:
             with open(pred_file, "r") as f:
                 for line in f.readlines():
@@ -778,28 +778,24 @@ def generate_bounding_boxes_both_levels(model_name, model_type, pred_dir, best_o
                     if len(parts) >= 6:
                         _, x, y, w, h, conf = map(float, parts)
                         if conf >= best_img_conf:
+                            has_any_detection = True
                             pred_box = xywh2xyxy(np.array([x, y, w, h]))
                             
-                            # If GT exists, check IoU
                             if gt_boxes:
                                 iou_values = [box_iou(pred_box, gt_box) for gt_box in gt_boxes]
                                 max_iou = max(iou_values)
                                 if max_iou > IOU_THRESHOLD:
-                                    has_valid_detection = True
+                                    has_overlapping_detection = True
                                     break
-                            else:
-                                # No GT, so any detection is FP
-                                has_valid_detection = True
-                                break
         
         # Determine image-level class
         if has_smoke_gt:
-            if has_valid_detection:
+            if has_overlapping_detection:
                 img_class = "TP"
             else:
                 img_class = "FN"
         else:
-            if has_valid_detection:
+            if has_any_detection:
                 img_class = "FP"
             else:
                 img_class = "TN"

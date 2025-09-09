@@ -1,0 +1,42 @@
+FINAL MODEL COMPARISON
+============================================================
+IoU Threshold: 0.01
+
+OBJECT-LEVEL RESULTS:
+----------------------------------------
+YOLO_baseline:
+  Best F1: 0.7343 @ conf=0.100
+  Precision: 0.7644
+  Recall: 0.7064
+
+RF-DETR_initial_training_best:
+  Best F1: 0.8290 @ conf=0.300
+  Precision: 0.8764
+  Recall: 0.7864
+
+RT-DETR_best_hparams:
+  Best F1: 0.8183 @ conf=0.450
+  Precision: 0.8480
+  Recall: 0.7906
+
+
+IMAGE-LEVEL RESULTS:
+----------------------------------------
+YOLO_baseline:
+  Best F1: 0.8145 @ conf=0.100
+  Precision: 0.9185
+  Recall: 0.7316
+  Accuracy: 0.7127
+
+RF-DETR_initial_training_best:
+  Best F1: 0.8980 @ conf=0.200
+  Precision: 0.9429
+  Recall: 0.8571
+  Accuracy: 0.8321
+
+RT-DETR_best_hparams:
+  Best F1: 0.8923 @ conf=0.300
+  Precision: 0.9157
+  Recall: 0.8701
+  Accuracy: 0.8190
+
