@@ -1,4 +1,4 @@
-# Inference time compare
+# Inference time compare on the GPU
 
 import glob
 import os
@@ -18,34 +18,34 @@ import sys
 # Add path for eval functions
 sys.path.append('/vol/bitbucket/si324/rf-detr-wildfire/src/images')
 
-# Force CPU usage
-os.environ['CUDA_VISIBLE_DEVICES'] = ''  # Hide GPUs
-torch.set_num_threads(4)  # Conservative thread count for fair comparison
 
 # Configuration
 OUTPUT_BASE_DIR = "/vol/bitbucket/si324/rf-detr-wildfire/src/images/inference_time_comparison"
 TEST_IMAGES_DIR = "/vol/bitbucket/si324/rf-detr-wildfire/src/images/data/pyro25img/images/test"
 
 def load_models(model_type, model_path):
-    """Load model once - FORCED TO CPU"""
+    """Load model once - FOR GPU"""
+    device = 'cuda' if torch.cuda.is_available() else 'cpu'
+    print(f"  Using device: {device}")
+    
     if model_type == "YOLO":
         from ultralytics import YOLO
         print(f"Loading YOLO from: {model_path}")
         model = YOLO(model_path)
-        model.to('cpu')  # Force CPU
+        # YOLO auto-detects GPU
         return model
     elif model_type == "RF-DETR":
         from rfdetr import RFDETRBase
         print(f"Loading RF-DETR from: {model_path}")
         model = RFDETRBase(pretrain_weights=model_path, num_classes=1)
         if hasattr(model, 'to'):
-            model.to('cpu')
+            model.to(device)
         return model
     elif model_type == "RT-DETR":
         from ultralytics import RTDETR
         print(f"Loading RT-DETR from: {model_path}")
         model = RTDETR(model_path)
-        model.to('cpu')  # Force CPU
+        # RT-DETR auto-detects GPU
         return model
     return None
 
@@ -60,14 +60,14 @@ def generate_rtdetr_predictions(model, image_path, conf_threshold):
     """Generate RT-DETR predictions - exact copy from eval script"""
     with Image.open(image_path) as img:
         img_rgb = img.convert("RGB")
-        results = model.predict(source=img_rgb, conf=conf_threshold, verbose=False, device='cpu')
+        results = model.predict(source=img_rgb, conf=conf_threshold, verbose=False) 
         predictions = sv.Detections.from_ultralytics(results[0])
     return predictions
 
 def run_single_inference(model, model_type, image_path):
-    """Run a single inference - using exact same logic as eval script"""
+    """Run a single inference """
     if model_type == "YOLO":
-        _ = model.predict(image_path, conf=0.01, iou=0.01, verbose=False, device='cpu')
+        _ = model.predict(image_path, conf=0.01, iou=0.01, verbose=False)
     elif model_type == "RF-DETR":
         _ = generate_rfdetr_predictions(model, image_path, 0.01)
     elif model_type == "RT-DETR":
@@ -76,7 +76,8 @@ def run_single_inference(model, model_type, image_path):
 def benchmark_model(model, model_type, test_images, num_warmup=5, num_test=100):
     """Benchmark a model's inference performance"""
     
-    print(f"  Running on CPU with {torch.get_num_threads()} threads")
+    device = 'cuda' if torch.cuda.is_available() else 'cpu'
+    print(f"  Running on {device.upper()}")
     
     # Get process for memory monitoring
     process = psutil.Process()
@@ -98,10 +99,19 @@ def benchmark_model(model, model_type, test_images, num_warmup=5, num_test=100):
     for i in tqdm(range(min(num_test, len(test_images))), desc="  Progress"):
         # Memory before
         mem_before = process.memory_info().rss / 1024 / 1024
+
+        # Add GPU synchronization BEFORE timing starts
+        if torch.cuda.is_available():
+            torch.cuda.synchronize()
         
         # Time the inference
         start_time = time.perf_counter()
         run_single_inference(model, model_type, test_images[i])
+
+        # Add GPU synchronization AFTER inference, BEFORE timing ends
+        if torch.cuda.is_available():
+            torch.cuda.synchronize()
+
         end_time = time.perf_counter()
         
         # Record metrics
@@ -153,11 +163,12 @@ if __name__ == "__main__":
     # Add system info
     print("\n" + "="*60)
     print("SYSTEM INFORMATION")
-    print("="*60)
     print(f"CPU: {platform.processor()}")
     print(f"Physical Cores: {psutil.cpu_count(logical=False)}")
     print(f"Logical Threads: {psutil.cpu_count(logical=True)}")
-    print(f"Threads Used: {torch.get_num_threads()}")
+    if torch.cuda.is_available():
+        print(f"GPU: {torch.cuda.get_device_name(0)}")
+        print(f"GPU Memory: {torch.cuda.get_device_properties(0).total_memory / 1024**3:.1f} GB")
     print("="*60)
     
     # Get test images
@@ -166,7 +177,8 @@ if __name__ == "__main__":
         test_images = sorted(glob.glob(os.path.join(TEST_IMAGES_DIR, "*.png")))
     
     print(f"\nFound {len(test_images)} test images")
-    print(f"Running on CPU (GPUs disabled)")
+    device = 'cuda' if torch.cuda.is_available() else 'cpu'
+    print(f"Running on {device.upper()}")
     print("="*60)
     
     # Benchmark each model
@@ -220,12 +232,12 @@ if __name__ == "__main__":
     
     # Save results
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    output_file = os.path.join(OUTPUT_BASE_DIR, f"benchmark_results_cpu_{timestamp}.json")
+    output_file = os.path.join(OUTPUT_BASE_DIR, f"benchmark_results_gpu_{timestamp}.json")
     
     with open(output_file, 'w') as f:
         json.dump({
             'timestamp': timestamp,
-            'device': 'CPU',
+            'device': 'GPU',
             'num_threads': torch.get_num_threads(),
             'system_info': {
                 'cpu': platform.processor(),

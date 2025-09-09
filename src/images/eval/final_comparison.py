@@ -213,15 +213,6 @@ def evaluate_predictions_image_level(pred_folder, gt_folder, conf_th=0.1, cat=No
     """Image-level evaluation - checking if the model detects smoke with spatial overlap"""
     img_tp, img_fp, img_fn, img_tn = 0, 0, 0, 0
 
-    gt_filenames = [
-        os.path.splitext(os.path.basename(f))[0]
-        for f in glob.glob(os.path.join(gt_folder, "*.txt"))
-    ]
-    pred_filenames = [
-        os.path.splitext(os.path.basename(f))[0]
-        for f in glob.glob(os.path.join(pred_folder, "*.txt"))
-    ]
-
     # Use ALL test images:
     test_images = glob.glob(os.path.join(TEST_IMAGES_DIR, "*.jpg"))
     test_images.extend(glob.glob(os.path.join(TEST_IMAGES_DIR, "*.png")))
@@ -231,29 +222,48 @@ def evaluate_predictions_image_level(pred_folder, gt_folder, conf_th=0.1, cat=No
         gt_file = os.path.join(gt_folder, f"{filename}.txt")
         pred_file = os.path.join(pred_folder, f"{filename}.txt")
 
-        # Check if GT has smoke
-        has_smoke_gt = os.path.isfile(gt_file) and os.path.getsize(gt_file) > 0
+        # Load GT boxes
+        gt_boxes = []
+        if os.path.isfile(gt_file) and os.path.getsize(gt_file) > 0:
+            with open(gt_file, "r") as f:
+                gt_boxes = [
+                    xywh2xyxy(np.array(line.strip().split(" ")[1:5]).astype(float))
+                    for line in f.readlines()
+                ]
         
-        # Check if predictions have smoke above threshold
-        has_smoke_pred = False
+        has_smoke_gt = len(gt_boxes) > 0
+        
+        # Check if any prediction spatially overlaps with GT
+        has_valid_detection = False
         if os.path.isfile(pred_file) and os.path.getsize(pred_file) > 0:
             with open(pred_file, "r") as f:
                 for line in f.readlines():
                     parts = line.strip().split()
                     if len(parts) >= 6:
-                        conf = float(parts[5])
+                        _, x, y, w, h, conf = map(float, parts)
                         if conf >= conf_th:
-                            has_smoke_pred = True
-                            break
+                            pred_box = xywh2xyxy(np.array([x, y, w, h]))
+                            
+                            # If GT exists, check IoU
+                            if gt_boxes:
+                                iou_values = [box_iou(pred_box, gt_box) for gt_box in gt_boxes]
+                                max_iou = max(iou_values)
+                                if max_iou > IOU_THRESHOLD:
+                                    has_valid_detection = True
+                                    break
+                            else:
+                                # No GT, so any detection is FP
+                                has_valid_detection = True
+                                break
 
         # Image-level classification
         if has_smoke_gt:
-            if has_smoke_pred:
+            if has_valid_detection:
                 img_tp += 1
             else:
                 img_fn += 1
         else:
-            if has_smoke_pred:
+            if has_valid_detection:
                 img_fp += 1
             else:
                 img_tn += 1
@@ -748,27 +758,48 @@ def generate_bounding_boxes_both_levels(model_name, model_type, pred_dir, best_o
                 draw_bounding_boxes(img_path, pred_file, gt_file, obj_classifications, 
                                 output_path, model_name, best_obj_conf, "FN", highlight_idx=fn_idx, thickness=6)
         
-        # Image-level classification
-        has_smoke_gt = os.path.isfile(gt_file) and os.path.getsize(gt_file) > 0
-        has_smoke_pred = False
+        # Image-level classification with IoU check
+        gt_boxes = []
+        if os.path.isfile(gt_file) and os.path.getsize(gt_file) > 0:
+            with open(gt_file, "r") as f:
+                gt_boxes = [
+                    xywh2xyxy(np.array(line.strip().split(" ")[1:5]).astype(float))
+                    for line in f.readlines()
+                ]
+        
+        has_smoke_gt = len(gt_boxes) > 0
+        
+        # Check if any prediction spatially overlaps with GT
+        has_valid_detection = False
         if os.path.isfile(pred_file) and os.path.getsize(pred_file) > 0:
             with open(pred_file, "r") as f:
                 for line in f.readlines():
                     parts = line.strip().split()
                     if len(parts) >= 6:
-                        conf = float(parts[5])
+                        _, x, y, w, h, conf = map(float, parts)
                         if conf >= best_img_conf:
-                            has_smoke_pred = True
-                            break
+                            pred_box = xywh2xyxy(np.array([x, y, w, h]))
+                            
+                            # If GT exists, check IoU
+                            if gt_boxes:
+                                iou_values = [box_iou(pred_box, gt_box) for gt_box in gt_boxes]
+                                max_iou = max(iou_values)
+                                if max_iou > IOU_THRESHOLD:
+                                    has_valid_detection = True
+                                    break
+                            else:
+                                # No GT, so any detection is FP
+                                has_valid_detection = True
+                                break
         
         # Determine image-level class
         if has_smoke_gt:
-            if has_smoke_pred:
+            if has_valid_detection:
                 img_class = "TP"
             else:
                 img_class = "FN"
         else:
-            if has_smoke_pred:
+            if has_valid_detection:
                 img_class = "FP"
             else:
                 img_class = "TN"

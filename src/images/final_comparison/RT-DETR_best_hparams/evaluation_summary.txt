@@ -10,9 +10,9 @@ Recall: 0.7906
 TP: 385, FP: 69, FN: 102
 
 IMAGE-LEVEL RESULTS:
-Best Confidence Threshold: 0.150
-Best F1 Score: 0.9257
-Precision: 0.8733
-Recall: 0.9848
-Accuracy: 0.8638
-TP: 455, FP: 66, FN: 7, TN: 8
+Best Confidence Threshold: 0.300
+Best F1 Score: 0.8923
+Precision: 0.9157
+Recall: 0.8701
+Accuracy: 0.8190
+TP: 402, FP: 37, FN: 60, TN: 37

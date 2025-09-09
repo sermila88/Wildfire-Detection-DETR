@@ -1,0 +1,13 @@
+Inference Time Comparison - CPU with NMS
+==================================================
+Hardware: Intel(R) Core(TM) i7-10700 CPU @ 2.90GHz
+Physical cores: 8
+Threads used: 8
+Test images: 536
+==================================================
+
+Model                Latency (ms)    FPS       
+---------------------------------------------
+YOLO_baseline        364.4           2.7       
+RF-DETR              287.7           3.5       
+RT-DETR              706.7           1.4       

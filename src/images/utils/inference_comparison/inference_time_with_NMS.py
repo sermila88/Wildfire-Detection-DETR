@@ -1,4 +1,4 @@
-# Inference compare
+# Inference compare with NMS
 
 import glob
 import os
@@ -15,6 +15,7 @@ import gc
 import platform, psutil
 import sys
 import cv2
+import subprocess
 
 # Add path for eval functions
 sys.path.append('/vol/bitbucket/si324/rf-detr-wildfire/src/images')
@@ -111,13 +112,10 @@ def run_single_inference(model, model_type, image_path):
     elif model_type == "RT-DETR":
         _ = generate_rtdetr_predictions(model, image_path, 0.01)
 
-def benchmark_model(model, model_type, test_images, num_warmup=5, num_test=100):
-    """Benchmark a model's inference performance"""
+def benchmark_model(model, model_type, test_images, num_warmup=10):
+    """Latency and FPS with NMS"""
     
     print(f"  Running on CPU with {torch.get_num_threads()} threads")
-    
-    # Get process for memory monitoring
-    process = psutil.Process()
     
     # Warmup runs
     print(f"  Warming up with {num_warmup} images...")
@@ -125,51 +123,24 @@ def benchmark_model(model, model_type, test_images, num_warmup=5, num_test=100):
         run_single_inference(model, model_type, test_images[i])
     
     # Actual benchmark
-    print(f"  Benchmarking {num_test} images...")
+    print(f"  Benchmarking all {len(test_images)} test images...")
     latencies = []
-    memory_usage = []
     
-    # Initial memory
-    initial_memory = process.memory_info().rss / 1024 / 1024  # MB
-    
-    # Progress bar
-    for i in tqdm(range(min(num_test, len(test_images))), desc="  Progress"):
-        # Memory before
-        mem_before = process.memory_info().rss / 1024 / 1024
-        
-        # Time the inference
+    for image_path in tqdm(test_images, desc="  Progress"):
         start_time = time.perf_counter()
-        run_single_inference(model, model_type, test_images[i])
+        run_single_inference(model, model_type, image_path)
         end_time = time.perf_counter()
         
-        # Record metrics
         latency_ms = (end_time - start_time) * 1000
         latencies.append(latency_ms)
-        
-        # Memory after
-        mem_after = process.memory_info().rss / 1024 / 1024
-        memory_usage.append(mem_after - initial_memory)
     
-    # Calculate statistics
-    latencies = np.array(latencies)
-    memory_usage = np.array(memory_usage)
+    mean_latency = np.mean(latencies)
+    fps = 1000 / mean_latency
     
-    results = {
-        'mean_latency_ms': float(np.mean(latencies)),
-        'std_latency_ms': float(np.std(latencies)),
-        'min_latency_ms': float(np.min(latencies)),
-        'max_latency_ms': float(np.max(latencies)),
-        'median_latency_ms': float(np.median(latencies)),
-        'p95_latency_ms': float(np.percentile(latencies, 95)),
-        'p99_latency_ms': float(np.percentile(latencies, 99)),
-        'throughput_fps': float(1000 / np.mean(latencies)),
-        'total_time_seconds': float(np.sum(latencies) / 1000),
-        'peak_memory_mb': float(np.max(memory_usage)) if len(memory_usage) > 0 else 0,
-        'avg_memory_mb': float(np.mean(memory_usage)) if len(memory_usage) > 0 else 0,
-        'num_images_tested': min(num_test, len(test_images))
+    return {
+        'mean_latency_ms': float(mean_latency),
+        'throughput_fps': float(fps)
     }
-    
-    return results
 
 if __name__ == "__main__":
     # Model configurations
@@ -192,7 +163,15 @@ if __name__ == "__main__":
     print("\n" + "="*60)
     print("SYSTEM INFORMATION")
     print("="*60)
-    print(f"CPU: {platform.processor()}")
+    
+    # CPU info
+    try:
+        cpu_info = subprocess.check_output("lscpu | grep 'Model name'", shell=True).decode().strip()
+        cpu_model = cpu_info.split(':')[1].strip() if ':' in cpu_info else "Unknown CPU"
+    except:
+        cpu_model = platform.processor()
+    
+    print(f"CPU: {cpu_model}")
     print(f"Physical Cores: {psutil.cpu_count(logical=False)}")
     print(f"Logical Threads: {psutil.cpu_count(logical=True)}")
     print(f"Threads Used: {torch.get_num_threads()}")
@@ -235,22 +214,15 @@ if __name__ == "__main__":
             model, 
             config['type'],
             test_images,
-            num_warmup=5,
-            num_test=536  # All test images
+            num_warmup=10
         )
         
         all_results[model_name] = results
         
         # Print results 
         print(f"\n  Results for {model_name}:")
-        print(f"    Mean latency:     {results['mean_latency_ms']:.2f} ms")
-        print(f"    Std latency:      {results['std_latency_ms']:.2f} ms")
-        print(f"    Median latency:   {results['median_latency_ms']:.2f} ms")
-        print(f"    P95 latency:      {results['p95_latency_ms']:.2f} ms")
-        print(f"    P99 latency:      {results['p99_latency_ms']:.2f} ms")
-        print(f"    Throughput:       {results['throughput_fps']:.2f} FPS")
-        print(f"    Total time:       {results['total_time_seconds']:.2f} seconds")
-        print(f"    Peak memory:      {results['peak_memory_mb']:.2f} MB")
+        print(f"    Latency: {results['mean_latency_ms']:.1f} ms")
+        print(f"    FPS:     {results['throughput_fps']:.1f}")
         
         # Clear model from memory
         del model
@@ -279,18 +251,27 @@ if __name__ == "__main__":
     
     # Print comparison table
     if all_results:
-        print(f"\n{'Model':<20} {'Mean (ms)':<12} {'FPS':<10} {'Memory (MB)':<12}")
-        print("-"*54)
+        print(f"\n{'Model':<20} {'Latency (ms)':<15} {'FPS':<10}")
+        print("-"*45)
         for model_name, results in all_results.items():
-            print(f"{model_name:<20} {results['mean_latency_ms']:<12.2f} {results['throughput_fps']:<10.2f} {results['peak_memory_mb']:<12.2f}")
+            print(f"{model_name:<20} {results['mean_latency_ms']:<15.1f} {results['throughput_fps']:<10.1f}")
     
     print(f"\nResults saved to: {output_file}")
     
-    # Performance ranking
-    if len(all_results) > 1:
-        print("\nPerformance Ranking (fastest to slowest):")
-        # Sort by latency
-        sorted_models = sorted(all_results.items(), key=lambda x: x[1]['mean_latency_ms'])
-        
-        for rank, (model_name, results) in enumerate(sorted_models, 1):
-            print(f"  {rank}. {model_name}: {results['mean_latency_ms']:.2f} ms ({results['throughput_fps']:.2f} FPS)")
+    # Save the table to a text file
+    output_dir = "/vol/bitbucket/si324/rf-detr-wildfire/src/images/Comparative_eval/CPU_NMS"
+    os.makedirs(output_dir, exist_ok=True)
+    
+    table_file = os.path.join(output_dir, "inference_time_comparison_CPU_with_NMS.txt")
+    with open(table_file, 'w') as f:
+        f.write("Inference Time Comparison - CPU with NMS\n")
+        f.write("="*50 + "\n")
+        f.write(f"Hardware: {cpu_model}\n")
+        f.write(f"Physical cores: {psutil.cpu_count(logical=False)}\n")
+        f.write(f"Threads used: {torch.get_num_threads()}\n")
+        f.write(f"Test images: {len(test_images)}\n")
+        f.write("="*50 + "\n\n")
+        f.write(f"{'Model':<20} {'Latency (ms)':<15} {'FPS':<10}\n")
+        f.write("-"*45 + "\n")
+        for model_name, results in all_results.items():
+            f.write(f"{model_name:<20} {results['mean_latency_ms']:<15.1f} {results['throughput_fps']:<10.1f}\n")

@@ -11,8 +11,8 @@ TP: 383, FP: 54, FN: 104
 
 IMAGE-LEVEL RESULTS:
 Best Confidence Threshold: 0.200
-Best F1 Score: 0.9307
-Precision: 0.9463
-Recall: 0.9156
-Accuracy: 0.8825
-TP: 423, FP: 24, FN: 39, TN: 50
+Best F1 Score: 0.8980
+Precision: 0.9429
+Recall: 0.8571
+Accuracy: 0.8321
+TP: 396, FP: 24, FN: 66, TN: 50

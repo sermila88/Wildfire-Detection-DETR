@@ -1,0 +1,24 @@
+{
+  "timestamp": "20250907_181830",
+  "device": "CPU",
+  "num_threads": 8,
+  "system_info": {
+    "cpu": "x86_64",
+    "physical_cores": 8,
+    "logical_threads": 16
+  },
+  "results": {
+    "YOLO_baseline": {
+      "mean_latency_ms": 364.4410443897081,
+      "throughput_fps": 2.7439280382773488
+    },
+    "RF-DETR": {
+      "mean_latency_ms": 287.7329446341922,
+      "throughput_fps": 3.475444917408901
+    },
+    "RT-DETR": {
+      "mean_latency_ms": 706.7076963980234,
+      "throughput_fps": 1.4150121826843556
+    }
+  }
+}
