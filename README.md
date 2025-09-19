@@ -38,8 +38,8 @@ Each dataset has YOLO annotations, own `data.yaml` (for RT-DETR training) and CO
 Scripts for model training:
 
 - `yolo_train.py` – Train YOLOv8 models on smoke datasets  
-- `rtdetr_train.py` – Train RT-DETR models (Ultralytics wrapper)  
-- `rfdetr_train.py` – Train RF-DETR models (custom repo)
+- `rtdetr_train.py` – Train RT-DETR models (Ultralytics)  
+- `rfdetr_train.py` – Train RF-DETR models (Roboflow)
 
 Training logs and checkpoints are saved under `outputs/{MODEL}/...`.
 
@@ -136,6 +136,10 @@ If you use this framework or datasets, please cite:
       primaryClass={cs.CV},
       url={https://arxiv.org/abs/2402.05349}, 
 }
+### Model Repositories Referenced
+- Ultralytics. [YOLOv8](https://github.com/ultralytics/ultralytics). GitHub.  
+- Ultralytics. [RT-DETR: Real-Time Detection Transformer](https://github.com/bharath5673/RT-DETR). GitHub.  
+- Roboflow. [RF-DETR: Roboflow’s Detection Transformer](https://github.com/roboflow/rf-detr). GitHub.  
 
 Additional external datasets referenced in this repository:
 
