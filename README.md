@@ -7,7 +7,7 @@ The framework extends the evaluation methodology introduced in [PyroNear](https:
 ---
 
 ## Directory Structure
-
+```bash
 src/images
 ├── data/ # Datasets (YOLO/COCO formatted)
 ├── train/ # Training scripts for YOLO, RT-DETR, RF-DETR
@@ -100,7 +100,7 @@ Helper scripts for dataset preparation, visualization, and inference comparison:
 - **Bounding box visualization**
   - `YOLO/yolo_ground_truth_bb.py` – Visualize YOLO ground-truth bounding boxes  
   - `YOLO/yolo_predict_bounding_boxes.py` – Visualize YOLO predictions with TP/FP/FN breakdown  
-  - `RF-DETR/rfdetr_generate_GT.py` – Generate RF-DETR ground-truth bounding boxes 
+  - `RF-DETR/rfdetr_generate_GT.py` – Generate RF-DETR ground-truth bounding boxes (COCO format)  
   - `RF-DETR/rfdetr_generate_pred_bounding_boxes.py` – RF-DETR predictions visualization  
   - `RT-DETR/rtdetr_generate_pred_bounding_boxes.py` – RT-DETR predictions visualization  
 
