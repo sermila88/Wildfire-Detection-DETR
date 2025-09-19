@@ -136,6 +136,7 @@ If you use this framework or datasets, please cite:
       primaryClass={cs.CV},
       url={https://arxiv.org/abs/2402.05349}, 
 }
+```
 ### Model Repositories Referenced
 - Ultralytics. [YOLOv8](https://github.com/ultralytics/ultralytics). GitHub.  
 - Ultralytics. [RT-DETR: Real-Time Detection Transformer](https://github.com/bharath5673/RT-DETR). GitHub.  
