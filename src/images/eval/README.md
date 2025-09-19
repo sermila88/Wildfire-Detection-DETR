@@ -3,6 +3,7 @@
 ## Overview
 This directory contains the complete evaluation pipeline for comparing **YOLOv8**, **RT-DETR**, and **RF-DETR** models on wildfire smoke detection tasks.  
 The framework computes both object-level and image-level metrics across different experimental configurations.
+This work extends the evaluation methodology introduced in [PyroNear](https://pyronear.org), adapting their evaluation logic for wildfire smoke detection models.
 
 ---
 
@@ -156,3 +157,18 @@ models = {
 - NumPy, Matplotlib, Seaborn  
 - Supervision  
 - tqdm  
+
+---
+
+## Citation
+```bibtex
+@misc{lostanlen2024scrappingwebearlywildfire,
+      title={Scrapping The Web For Early Wildfire Detection: A New Annotated Dataset of Images and Videos of Smoke Plumes In-the-wild}, 
+      author={Mateo Lostanlen and Nicolas Isla and Jose Guillen and Felix Veith and Cristian Buc and Valentin Barriere},
+      year={2024},
+      eprint={2402.05349},
+      archivePrefix={arXiv},
+      primaryClass={cs.CV},
+      url={https://arxiv.org/abs/2402.05349}, 
+}
+```
