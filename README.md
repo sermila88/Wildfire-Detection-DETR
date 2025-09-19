@@ -14,7 +14,7 @@ src/images
 ├── eval/ # Evaluation pipelines (object-level & image-level)
 ├── hyperparameter_tuning/ # Optuna-based tuning for RT-DETR & RF-DETR
 └── utils/ # Dataset conversion, bounding box visualization, inference comparison
-
+```
 ---
 
 ## Datasets (`data/`)
