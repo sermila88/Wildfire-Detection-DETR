@@ -1,94 +1,154 @@
-# Experiment Output Structure
+# Wildfire Smoke Detection Framework
 
-## 📁 Directory Structure
+This repository provides a complete pipeline for training, evaluating, and comparing object detection models for **early wildfire smoke detection**.  
+It supports **YOLOv8**, **RT-DETR**, and **RF-DETR** models, with utilities for dataset conversion, hyperparameter tuning, evaluation, and visualization.  
+The framework extends the evaluation methodology introduced in [PyroNear](https://pyronear.org) replicating their YOLOv8 baseline and adapting their evaluation logic for wildfire smoke detection models.
 
-```
-outputs/
-├── {EXPERIMENT_NAME}/
-│   ├── checkpoints/     # Model weights and training checkpoints
-│   ├── plots/          # All visualization plots (mAP, confusion matrix, etc.)
-│   ├── logs/           # Training logs and metrics
-│   └── eval_results/   # Evaluation results (JSON and summary files)
+---
 
-bounding_boxes/         # Generated bounding box visualizations
-├── Ground_truth/       # Ground truth annotations (splits: train/valid/test)
-└── predictions/        # Model predictions organized by experiment
-    └── {EXPERIMENT_NAME}/
-        ├── train/
-        ├── valid/
-        └── test/
+## Directory Structure
 
-utils/                  # Utility scripts and helpers 
-├── generate_GT.py      # Generate ground truth bounding box images
-└── generate_predictions.py  # Generate prediction bounding box images
-```
+src/images
+├── data/ # Datasets (YOLO/COCO formatted)
+├── train/ # Training scripts for YOLO, RT-DETR, RF-DETR
+├── eval/ # Evaluation pipelines (object-level & image-level)
+├── hyperparameter_tuning/ # Optuna-based tuning for RT-DETR & RF-DETR
+└── utils/ # Dataset conversion, bounding box visualization, inference comparison
 
-## 🎯 How to Use
+---
 
-### 1. Training
+## Datasets (`data/`)
 
-In `train/train.py`, modify the experiment name:
+This repository supports multiple wildfire smoke datasets used for evaluation and comparison:  
 
-```python
-EXPERIMENT_NAME = "rfdetr_smoke_detection_v1"  # Change this for different experiments
-```
+- **pyro25img/** – Main dataset (YOLO format: `images/` + `labels/`), used for training and primary evaluation.  
+- **Fuego/** – Test set derived from the Fuego project, annotated from the HPWREN camera network with wildfire data from Cal Fire [Govil et al., 2020; Team Fuego, 2020].  
+- **Nemo/** – Validation split from the Nemo dataset, which provides multi-level smoke intensity labels (low, mid, high) [Yazdi et al., 2022].  
+- **AI For Mankind/** – Test set developed by AI For Mankind, annotated with the help of volunteers [AI For Mankind, 2020; AI For Mankind, 2025].  
+- **SmokeFrames/** – Subsampled by PyroNear from the SmokeNet ProjectX video dataset [De Schaetzen et al., 2020].  
 
-Run training:
-```bash
-python train/train.py
-```
+These external datasets provide diverse testing conditions with different regions, camera perspectives, and smoke characteristics, enabling assessment of model generalisation beyond the PyroNear test set.
 
-This will create:
-- `outputs/rfdetr_smoke_detection_v1/checkpoints/` - Contains model weights
-- Directory structure for this experiment
+Each dataset has YOLO annotations, own `data.yaml` (for RT-DETR training) and COCO annotations (`_annotations.coco.json`) for RF-DETR
 
-### 2. Evaluation
+---
 
-In `eval/eval_final.py`, use the **same experiment name**:
+## Training (`train/`)
 
-```python
-EXPERIMENT_NAME = "rfdetr_smoke_detection_v1"  # Must match training!
-```
+Scripts for model training:
 
-Run evaluation:
-```bash
-python eval/eval_final.py
-```
+- `yolo_train.py` – Train YOLOv8 models on smoke datasets  
+- `rtdetr_train.py` – Train RT-DETR models (Ultralytics wrapper)  
+- `rfdetr_train.py` – Train RF-DETR models (custom repo)
 
-This will create:
-- `outputs/rfdetr_smoke_detection_v1/eval_results/` - JSON results and summary
-- `outputs/rfdetr_smoke_detection_v1/plots/` - Visualization plots
+Training logs and checkpoints are saved under `outputs/{MODEL}/...`.
 
-## 🔄 Multiple Experiments
+---
 
-To run different experiments:
+## Evaluation (`eval/`)
 
-1. **Change experiment name** in both `train.py` and `eval_final.py`
-2. **Train the model** with the new name
-3. **Evaluate** using the same name
+Comprehensive evaluation pipelines for comparing models at both **object-level** (individual smoke plume bounding boxes) and **image-level** (smoke/no-smoke classification with spatial overlap):
 
-Example:
-```python
-# Experiment 1
-EXPERIMENT_NAME = "rfdetr_smoke_detection_v1"
+- `Comparative_eval/`
+  - `eval_compare.py` – Baseline comparison  
+  - `eval_compare_NMS.py` – Comparison with NMS applied to DETRs  
+  - `eval_compare_hparam_tuning.py` – Comparison after hyperparameter tuning  
+  - `final_comparison.py` – Full object + image-level evaluation (IoU = 0.01)
 
-# Experiment 2 
-EXPERIMENT_NAME = "smoke_detection_lowres_v2"
+- **YOLOv8/**: `pyronear_eval.py`, `yolo_generate_predictions.py`  
+- **RT-DETR/**: `rtdetr_eval.py`  
+- **RF-DETR/**: `rfdetr_eval.py`
 
-# Experiment 3
-EXPERIMENT_NAME = "smoke_detection_augmented_v3"
-```
+Outputs include:
+- Precision, Recall, F1-score (IoU thresholds 0.01 & 0.1)  
+- Confidence-threshold sweeps  
+- Confusion matrices (object + image-level)  
+- Bounding box visualizations (TP/FP/FN/TN)  
+- JSON + human-readable summaries  
 
-## 📊 Output Files
+---
 
-### Training Outputs
-- `checkpoints/checkpoint_best.pth` - Best model weights
-- `checkpoints/checkpoint_best_ema.pth` - EMA-smoothed weights 
-- `checkpoints/metrics_plot.png` - Training metrics plot
+## Hyperparameter Tuning (`hyperparameter_tuning/`)
 
-### Evaluation Outputs  
-- `eval_results/evaluation_results.json` - Complete metrics in JSON format
-- `eval_results/evaluation_summary.txt` - Human-readable summary
-- `plots/map_plot.png` - mAP visualization
-- `plots/confusion_matrix.png` - Confusion matrix plot
+Optuna-based tuning scripts with automatic checkpointing, metric logging, and visualization:
 
+- **RF-DETR/**:  
+  - `rf_detr_hyperparameter_tuning.py`  
+  - `rf_detr_hparam_eval_val.py`  
+  - `rf_detr_hparam_visualisations.py`
+
+- **RT-DETR/**:  
+  - `rt_detr_hyperparameter_tuning.py`  
+  - `rt_detr_hparam_eval_val.py`  
+  - `rt_detr_hparam_visualisations.py`
+
+---
+
+## Utilities (`utils/`)
+
+Helper scripts for dataset preparation, visualization, and inference comparison:
+
+- **Dataset conversion**
+  - `convert_yolo_to_coco.py`  
+    Converts YOLO-format annotations (`class x_center y_center w h`) into **COCO JSON format**,  
+    required for training and evaluating **RF-DETR**.  
+    Ensures all images (including empty-label “no-smoke” images) are included.
+
+- **Dataset breakdown**
+  - `pyro_img_data_breakdown.py` – Counts smoke vs no-smoke images per split and generates summary tables.
+
+- **Bounding box visualization**
+  - `YOLO/yolo_ground_truth_bb.py` – Visualize YOLO ground-truth bounding boxes  
+  - `YOLO/yolo_predict_bounding_boxes.py` – Visualize YOLO predictions with TP/FP/FN breakdown  
+  - `RF-DETR/rfdetr_generate_GT.py` – Generate RF-DETR ground-truth bounding boxes 
+  - `RF-DETR/rfdetr_generate_pred_bounding_boxes.py` – RF-DETR predictions visualization  
+  - `RT-DETR/rtdetr_generate_pred_bounding_boxes.py` – RT-DETR predictions visualization  
+
+- **Inference comparison**
+  - `inference_comparison/inference_time_comparison.py` – CPU inference time per model (latency, FPS)  
+  - `inference_comparison/inference_time_with_NMS.py` – Same as above, with NMS applied  
+
+---
+
+## Dependencies
+
+- Python 3.10+  
+- PyTorch  
+- Ultralytics (YOLOv8, RT-DETR)  
+- [RF-DETR](https://github.com/roboflow/rf-detr)  
+- OpenCV, NumPy, Matplotlib, Seaborn  
+- Supervision  
+- tqdm, Optuna, psutil  
+
+---
+
+## Citation
+
+If you use this framework or datasets, please cite:  
+
+```bibtex
+@misc{lostanlen2024scrappingwebearlywildfire,
+      title={Scrapping The Web For Early Wildfire Detection: A New Annotated Dataset of Images and Videos of Smoke Plumes In-the-wild}, 
+      author={Mateo Lostanlen and Nicolas Isla and Jose Guillen and Felix Veith and Cristian Buc and Valentin Barriere},
+      year={2024},
+      eprint={2402.05349},
+      archivePrefix={arXiv},
+      primaryClass={cs.CV},
+      url={https://arxiv.org/abs/2402.05349}, 
+}
+
+Additional external datasets referenced in this repository:
+
+Govil K, Welch ML, Ball JT, Pennypacker CR. Preliminary Results from a Wildfire Detection System Using Deep Learning on Remote Camera Images. Remote Sensing. 2020;12(1):166. https://doi.org/10.3390/rs12010166
+
+FUEGO Project. Firecam: FUEGO Wildfire Detection Repository. GitHub, 2020. https://github.com/fuego-dev/firecam
+
+Yazdi A, Qin H, Jordan C, Yang L, Yan F. NEMO: An Open-Source Transformer-Supercharged Benchmark for Fine-Grained Wildfire Smoke Detection. Remote Sensing. 2022;14(16):3979. https://doi.org/10.3390/rs14163979
+
+NEMO Dataset. GitHub, 2022. https://github.com/SayBender/Nemo
+
+AI For Mankind. Open Wildfire Smoke Datasets. GitHub, 2020. https://github.com/aiformankind/wildfire-smoke-dataset
+
+AI For Mankind. AI For Mankind. Website, 2025. https://aiformankind.org/
+
+De Schaetzen R, Menoni R, Chang C, Chen Y, Hasani D. Smoke Detection Model on the ALERTWildfire Camera Network. ProjectX Report, 2020. https://rdesc.dev/project_x_final.pdf
