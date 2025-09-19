@@ -161,6 +161,7 @@ models = {
 ---
 
 ## Citation
+If you use this work, please cite the PyroNear paper:
 ```bibtex
 @misc{lostanlen2024scrappingwebearlywildfire,
       title={Scrapping The Web For Early Wildfire Detection: A New Annotated Dataset of Images and Videos of Smoke Plumes In-the-wild}, 
