@@ -38,6 +38,7 @@ pyro_readme_datasets_initial_eval
 OLD_final_compare
 NEMO_evaluation_x
 pyro_readme_data_breakdown
+old_image_repo_all_results
 
 # SLURM job outputs
 *.out

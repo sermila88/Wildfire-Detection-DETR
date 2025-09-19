@@ -1,3 +1,7 @@
+"""
+Baseline YOLOv8 Training Script
+"""
+
 import argparse
 from ultralytics import YOLO
 import wandb
